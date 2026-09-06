@@ -1,0 +1,19 @@
+# render.yaml - Render.com deployment configuration
+# This file tells Render how to deploy the app
+
+services:
+  - type: web
+    name: shein-orders-app
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/auth/status
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000

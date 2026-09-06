@@ -1,0 +1,17 @@
+{
+  "name": "shein-orders-app",
+  "version": "1.0.0",
+  "description": "تطبيق إدارة طلبات SHEIN - حسابات أم مروان",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "better-sqlite3": "^11.7.0",
+    "express-session": "^1.18.1",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7"
+  }
+}
