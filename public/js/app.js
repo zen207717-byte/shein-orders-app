@@ -9,6 +9,18 @@ const STATUS_LABELS = {
   delivered: 'تم التسليم للزبونة'
 };
 
+const ITEM_STATUS_LABELS = {
+  in_cart: 'في السلة',
+  ordered: 'تم الطلب من SHEIN',
+  shipped: 'تم الشحن',
+  arrived: 'وصلت',
+  delivered: 'تم التسليم',
+  cancelled_by_customer: 'ملغاة من الزبونة',
+  out_of_stock: 'نفدت من SHEIN'
+};
+
+const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock']);
+
 const CURRENCY_SYMBOLS = { SAR: 'ر.س', YER: 'ر.ي' };
 
 let state = {
@@ -21,7 +33,8 @@ let state = {
   dashboard: null,
   currentView: 'dashboard',
   selectedShipmentOrders: new Set(),
-  manualCosts: {}
+  manualCosts: {},
+  currentOrderItems: []
 };
 
 // ============== API HELPER ==============
@@ -302,6 +315,7 @@ function renderOrders() {
         <div class="order-card-date">${fmtDate(o.order_date)}</div>
       </div>
       <div class="order-card-status status-${o.status}">${STATUS_LABELS[o.status] || o.status}</div>
+      <div class="order-card-items">🧾 ${o.item_count || 0} قطعة</div>
       <div class="order-card-row"><span>رقم الطلب:</span><strong>${escapeHtml(o.order_number || '-')}</strong></div>
       <div class="order-card-row"><span>قيمة الزبونة:</span><strong>${fmt(o.customer_value, o.currency)}</strong></div>
       <div class="order-card-row"><span>المدفوع لـ SHEIN:</span><strong>${fmt(o.shein_paid, o.currency)}</strong></div>
@@ -332,6 +346,10 @@ function openOrderModal(orderId) {
   form.reset();
   document.getElementById('order-id').value = '';
   document.getElementById('order-date').value = new Date().toISOString().split('T')[0];
+  state.currentOrderItems = [];
+  document.getElementById('order-items-section').style.display = 'none';
+  document.getElementById('new-order-items-note').style.display = 'none';
+  setOrderTotalsReadonly(false);
 
   // Populate status select
   const sel = document.getElementById('order-status');
@@ -345,7 +363,7 @@ function openOrderModal(orderId) {
 
   if (orderId) {
     document.getElementById('order-modal-title').textContent = 'تعديل الطلب';
-    const o = state.orders.find(x => x.id === orderId);
+    const o = state.orders.find(x => String(x.id) === String(orderId));
     if (o) {
       document.getElementById('order-id').value = o.id;
       document.getElementById('order-customer-name').value = o.customer_name;
@@ -358,14 +376,158 @@ function openOrderModal(orderId) {
       document.getElementById('order-customer-paid').value = o.customer_paid || '';
       document.getElementById('order-status').value = o.status || 'new';
       document.getElementById('order-notes').value = o.notes || '';
+      loadOrderItems(o.id);
     }
   } else {
     document.getElementById('order-modal-title').textContent = 'إضافة طلب جديد';
     document.getElementById('order-status').value = 'new';
+    document.getElementById('order-items-section').style.display = 'none';
+    document.getElementById('new-order-items-note').style.display = 'block';
+    setOrderTotalsReadonly(false);
   }
   updateAutoCalc();
   modal.style.display = 'flex';
 }
+
+function setOrderTotalsReadonly(hasItems) {
+  document.getElementById('order-customer-value').readOnly = hasItems;
+  document.getElementById('order-shein-paid').readOnly = hasItems;
+  document.getElementById('items-total-note').style.display = hasItems ? 'block' : 'none';
+}
+
+async function loadOrderItems(orderId) {
+  try {
+    state.currentOrderItems = await api('/orders/' + orderId + '/items');
+    document.getElementById('order-items-section').style.display = 'block';
+    document.getElementById('new-order-items-note').style.display = 'none';
+    renderOrderItems();
+    const hasItems = state.currentOrderItems.length > 0;
+    setOrderTotalsReadonly(hasItems);
+    if (hasItems) {
+      const customerTotal = state.currentOrderItems.reduce((sum, item) => sum + item.customer_total, 0);
+      const sheinTotal = state.currentOrderItems.reduce((sum, item) => sum + item.shein_total, 0);
+      document.getElementById('order-customer-value').value = customerTotal.toFixed(2);
+      document.getElementById('order-shein-paid').value = sheinTotal.toFixed(2);
+      updateAutoCalc();
+    }
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function renderOrderItems() {
+  const list = document.getElementById('order-items-list');
+  if (state.currentOrderItems.length === 0) {
+    list.innerHTML = '<div class="empty-items">لا توجد قطع داخل هذا الطلب بعد.</div>';
+    return;
+  }
+  list.innerHTML = state.currentOrderItems.map(item => {
+    const image = item.image_url
+      ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.parentElement.classList.add('image-failed');this.remove()">`
+      : '<span>🛍️</span>';
+    const statusClass = EXCLUDED_ITEM_STATUSES.has(item.status) ? ' item-card-excluded' : '';
+    return `
+      <article class="item-card${statusClass}">
+        <div class="item-card-image">${image}</div>
+        <div class="item-card-content">
+          <div class="item-card-top"><strong>${escapeHtml(item.product_name)}</strong><span class="item-status status-item-${item.status}">${ITEM_STATUS_LABELS[item.status]}</span></div>
+          <div class="item-meta">${escapeHtml(item.color || 'بدون لون')} • ${escapeHtml(item.size || 'بدون مقاس')} • الكمية: ${item.quantity}</div>
+          <div class="item-prices"><span>للزبونة: <b>${fmt(item.customer_total, document.getElementById('order-currency').value)}</b></span><span>SHEIN: <b>${fmt(item.shein_total, document.getElementById('order-currency').value)}</b></span><span class="text-success">الربح: <b>${fmt(item.commission, document.getElementById('order-currency').value)}</b></span></div>
+          <div class="item-card-actions">
+            ${item.product_url ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(item.product_url)}" target="_blank" rel="noopener noreferrer">فتح الرابط</a>` : ''}
+            <button type="button" class="btn btn-outline btn-sm" onclick="openItemModal(${item.id})">تعديل القطعة</button>
+          </div>
+        </div>
+      </article>`;
+  }).join('');
+}
+
+document.getElementById('add-item-btn').addEventListener('click', () => openItemModal(null));
+
+function openItemModal(itemId) {
+  const orderId = document.getElementById('order-id').value;
+  if (!orderId) return toast('احفظ الطلب أولًا', 'warning');
+  document.getElementById('item-form').reset();
+  document.getElementById('item-id').value = '';
+  document.getElementById('item-quantity').value = '1';
+  const statusSelect = document.getElementById('item-status');
+  statusSelect.innerHTML = Object.entries(ITEM_STATUS_LABELS)
+    .map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+  if (itemId) {
+    const item = state.currentOrderItems.find(x => String(x.id) === String(itemId));
+    if (!item) return;
+    document.getElementById('item-modal-title').textContent = 'تعديل القطعة';
+    document.getElementById('item-id').value = item.id;
+    document.getElementById('item-product-url').value = item.product_url || '';
+    document.getElementById('item-product-name').value = item.product_name || '';
+    document.getElementById('item-image-url').value = item.image_url || '';
+    document.getElementById('item-color').value = item.color || '';
+    document.getElementById('item-size').value = item.size || '';
+    document.getElementById('item-quantity').value = item.quantity;
+    document.getElementById('item-customer-price').value = item.customer_unit_price;
+    document.getElementById('item-shein-price').value = item.shein_unit_price;
+    document.getElementById('item-status').value = item.status;
+  } else {
+    document.getElementById('item-modal-title').textContent = 'إضافة قطعة';
+    document.getElementById('item-status').value = 'in_cart';
+  }
+  updateItemCalc();
+  updateItemImagePreview();
+  document.getElementById('item-modal').style.display = 'flex';
+}
+
+['item-quantity', 'item-customer-price', 'item-shein-price', 'item-status'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateItemCalc);
+  document.getElementById(id).addEventListener('change', updateItemCalc);
+});
+document.getElementById('item-image-url').addEventListener('input', updateItemImagePreview);
+
+function updateItemCalc() {
+  const quantity = parseInt(document.getElementById('item-quantity').value, 10) || 0;
+  const customerPrice = parseFloat(document.getElementById('item-customer-price').value) || 0;
+  const sheinPrice = parseFloat(document.getElementById('item-shein-price').value) || 0;
+  const excluded = EXCLUDED_ITEM_STATUSES.has(document.getElementById('item-status').value);
+  const customerTotal = excluded ? 0 : quantity * customerPrice;
+  const sheinTotal = excluded ? 0 : quantity * sheinPrice;
+  document.getElementById('item-customer-total').textContent = customerTotal.toFixed(2);
+  document.getElementById('item-shein-total').textContent = sheinTotal.toFixed(2);
+  document.getElementById('item-commission').textContent = (customerTotal - sheinTotal).toFixed(2);
+  document.getElementById('item-excluded-warning').style.display = excluded ? 'block' : 'none';
+}
+
+function updateItemImagePreview() {
+  const url = document.getElementById('item-image-url').value.trim();
+  const preview = document.getElementById('item-image-preview');
+  preview.style.display = url ? 'flex' : 'none';
+  preview.innerHTML = url ? `<img src="${escapeHtml(url)}" alt="معاينة صورة المنتج" onerror="this.parentElement.style.display='none'">` : '';
+}
+
+document.getElementById('item-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const itemId = document.getElementById('item-id').value;
+  const orderId = document.getElementById('order-id').value;
+  const data = {
+    product_url: document.getElementById('item-product-url').value.trim(),
+    product_name: document.getElementById('item-product-name').value.trim(),
+    image_url: document.getElementById('item-image-url').value.trim(),
+    color: document.getElementById('item-color').value.trim(),
+    size: document.getElementById('item-size').value.trim(),
+    quantity: parseInt(document.getElementById('item-quantity').value, 10),
+    customer_unit_price: parseFloat(document.getElementById('item-customer-price').value),
+    shein_unit_price: parseFloat(document.getElementById('item-shein-price').value),
+    status: document.getElementById('item-status').value
+  };
+  try {
+    if (itemId) await api('/order-items/' + itemId, { method: 'PUT', body: data });
+    else await api('/orders/' + orderId + '/items', { method: 'POST', body: data });
+    closeModal('item-modal');
+    await loadOrderItems(orderId);
+    await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
+    toast(itemId ? 'تم تحديث القطعة' : 'تمت إضافة القطعة', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+});
 
 function closeModal(id) {
   document.getElementById(id).style.display = 'none';
@@ -419,8 +581,11 @@ document.getElementById('order-form').addEventListener('submit', async (e) => {
       await api('/orders/' + id, { method: 'PUT', body: data });
       toast('تم تحديث الطلب', 'success');
     } else {
-      await api('/orders', { method: 'POST', body: data });
-      toast('تم إضافة الطلب', 'success');
+      const created = await api('/orders', { method: 'POST', body: data });
+      toast('تم حفظ الطلب، أضف القطع الآن', 'success');
+      await loadOrders();
+      openOrderModal(created.id);
+      return;
     }
     closeModal('order-modal');
     await loadOrders();

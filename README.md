@@ -8,6 +8,8 @@
 - ✅ **تسجيل دخول آمن** (username + password)
 - ✅ **دعم العملات**: ريال سعودي (SAR) وريال يمني (YER) مع تحويل تلقائي
 - ✅ **إدارة الطلبات** مع حساب تلقائي للعمولة والنسبة والمتبقي
+- ✅ **قطع مستقلة داخل كل طلب** مع الرابط والصورة واللون والمقاس والكمية والأسعار والحالة
+- ✅ **سجل حالات القطعة** مع إبقاء القطع الملغاة أو النافدة واستبعادها من الإجماليات
 - ✅ **6 حالات للطلب**: جديد → تم الطلب → وصل السعودية → شحن لليمن → وصل اليمن → تم التسليم
 - ✅ **إدارة الشحنات**: إنشاء شحنة + توزيع التكلفة (بالتساوي أو يدوي)
 - ✅ **صفحات الزبائن**: ملخص + جميع الطلبات
@@ -94,6 +96,12 @@ server {
 - `PUT /api/orders/:id` - تعديل طلب
 - `DELETE /api/orders/:id` - حذف طلب
 
+### قطع الطلب
+- `GET /api/orders/:orderId/items` - عرض قطع الطلب
+- `POST /api/orders/:orderId/items` - إضافة قطعة للطلب
+- `PUT /api/order-items/:id` - تعديل بيانات القطعة أو حالتها
+- `GET /api/order-items/:id/history` - سجل تغييرات حالة القطعة
+
 ### الشحنات
 - `GET /api/shipments` - قائمة الشحنات
 - `GET /api/shipments/:id` - تفاصيل شحنة
@@ -121,6 +129,9 @@ orders (id, customer_name, customer_phone, order_number, order_date,
         customer_value, shein_paid, customer_paid, currency, status,
         shipment_id, shipping_cost, notes, created_at, updated_at)
 shipments (id, name, total_cost, currency, distribution, status, notes, created_at)
+order_items (id, order_id, product_url, product_name, image_url, color, size,
+             quantity, customer_unit_price, shein_unit_price, status, created_at, updated_at)
+order_item_status_history (id, item_id, old_status, new_status, changed_at)
 settings (key, value)
 ```
 

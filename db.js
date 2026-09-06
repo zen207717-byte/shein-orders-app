@@ -55,11 +55,45 @@ db.exec(`
     FOREIGN KEY (shipment_id) REFERENCES shipments(id) ON DELETE SET NULL
   );
 
+  CREATE TABLE IF NOT EXISTS order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    product_url TEXT,
+    product_name TEXT NOT NULL,
+    image_url TEXT,
+    color TEXT,
+    size TEXT,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    customer_unit_price REAL NOT NULL DEFAULT 0 CHECK (customer_unit_price >= 0),
+    shein_unit_price REAL NOT NULL DEFAULT 0 CHECK (shein_unit_price >= 0),
+    status TEXT NOT NULL DEFAULT 'in_cart' CHECK (status IN (
+      'in_cart', 'ordered', 'shipped', 'arrived', 'delivered',
+      'cancelled_by_customer', 'out_of_stock'
+    )),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS order_item_status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    old_status TEXT,
+    new_status TEXT NOT NULL,
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES order_items(id) ON DELETE CASCADE
+  );
+
   CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_name);
   CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
   CREATE INDEX IF NOT EXISTS idx_orders_shipment ON orders(shipment_id);
   CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(order_date);
+  CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  CREATE INDEX IF NOT EXISTS idx_order_items_status ON order_items(status);
+  CREATE INDEX IF NOT EXISTS idx_item_history_item ON order_item_status_history(item_id, changed_at);
 `);
+
+db.pragma('optimize');
 
 // Seed default user (username: admin, password: admin123) if not exists
 const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;

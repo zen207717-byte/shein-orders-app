@@ -31,6 +31,70 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: 'unauthorized' });
 }
 
+const ITEM_STATUSES = new Set([
+  'in_cart', 'ordered', 'shipped', 'arrived', 'delivered',
+  'cancelled_by_customer', 'out_of_stock'
+]);
+const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock']);
+
+function isHttpUrl(value) {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+function itemTotals(item) {
+  const quantity = Number(item.quantity) || 0;
+  const excluded = EXCLUDED_ITEM_STATUSES.has(item.status);
+  const customerTotal = excluded ? 0 : quantity * (Number(item.customer_unit_price) || 0);
+  const sheinTotal = excluded ? 0 : quantity * (Number(item.shein_unit_price) || 0);
+  return {
+    customer_total: customerTotal,
+    shein_total: sheinTotal,
+    commission: customerTotal - sheinTotal,
+    excluded_from_totals: excluded
+  };
+}
+
+function hydrateItem(item) {
+  return { ...item, ...itemTotals(item) };
+}
+
+function syncOrderTotals(orderId) {
+  const totals = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN status NOT IN ('cancelled_by_customer', 'out_of_stock')
+        THEN quantity * customer_unit_price ELSE 0 END), 0) AS customer_value,
+      COALESCE(SUM(CASE WHEN status NOT IN ('cancelled_by_customer', 'out_of_stock')
+        THEN quantity * shein_unit_price ELSE 0 END), 0) AS shein_paid
+    FROM order_items WHERE order_id = ?
+  `).get(orderId);
+  db.prepare(`
+    UPDATE orders SET customer_value = ?, shein_paid = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(totals.customer_value, totals.shein_paid, orderId);
+}
+
+function validateItemInput(body) {
+  const productName = String(body.product_name || '').trim();
+  const quantity = Number(body.quantity);
+  const customerPrice = Number(body.customer_unit_price);
+  const sheinPrice = Number(body.shein_unit_price);
+  const status = body.status || 'in_cart';
+  if (!productName) return 'اسم أو وصف المنتج مطلوب';
+  if (!Number.isInteger(quantity) || quantity < 1) return 'الكمية يجب أن تكون رقمًا صحيحًا أكبر من صفر';
+  if (!Number.isFinite(customerPrice) || customerPrice < 0) return 'السعر الظاهر للزبونة غير صحيح';
+  if (!Number.isFinite(sheinPrice) || sheinPrice < 0) return 'السعر الفعلي لـ SHEIN غير صحيح';
+  if (!ITEM_STATUSES.has(status)) return 'حالة القطعة غير صحيحة';
+  if (!isHttpUrl(body.product_url)) return 'رابط المنتج غير صحيح';
+  if (!isHttpUrl(body.image_url)) return 'رابط الصورة غير صحيح';
+  return null;
+}
+
 // ========== AUTH ROUTES ==========
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body || {};
@@ -96,7 +160,9 @@ app.put('/api/settings', requireAuth, (req, res) => {
 // ========== ORDERS ROUTES ==========
 app.get('/api/orders', requireAuth, (req, res) => {
   const rows = db.prepare(`
-    SELECT * FROM orders
+    SELECT orders.*,
+      (SELECT COUNT(*) FROM order_items WHERE order_id = orders.id) AS item_count
+    FROM orders
     ORDER BY order_date DESC, id DESC
   `).all();
   res.json(rows);
@@ -105,7 +171,80 @@ app.get('/api/orders', requireAuth, (req, res) => {
 app.get('/api/orders/:id', requireAuth, (req, res) => {
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'الطلب غير موجود' });
-  res.json(row);
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC').all(row.id).map(hydrateItem);
+  res.json({ ...row, items });
+});
+
+// ========== ORDER ITEMS ROUTES ==========
+app.get('/api/orders/:orderId/items', requireAuth, (req, res) => {
+  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC').all(order.id);
+  res.json(items.map(hydrateItem));
+});
+
+app.post('/api/orders/:orderId/items', requireAuth, (req, res) => {
+  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  const error = validateItemInput(req.body || {});
+  if (error) return res.status(400).json({ error });
+  const body = req.body;
+  const trx = db.transaction(() => {
+    const info = db.prepare(`
+      INSERT INTO order_items
+      (order_id, product_url, product_name, image_url, color, size, quantity,
+       customer_unit_price, shein_unit_price, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      order.id, String(body.product_url || '').trim(), String(body.product_name).trim(),
+      String(body.image_url || '').trim(), String(body.color || '').trim(),
+      String(body.size || '').trim(), Number(body.quantity), Number(body.customer_unit_price),
+      Number(body.shein_unit_price), body.status || 'in_cart'
+    );
+    db.prepare(`
+      INSERT INTO order_item_status_history (item_id, old_status, new_status)
+      VALUES (?, NULL, ?)
+    `).run(info.lastInsertRowid, body.status || 'in_cart');
+    syncOrderTotals(order.id);
+    return info.lastInsertRowid;
+  });
+  const itemId = trx();
+  res.status(201).json(hydrateItem(db.prepare('SELECT * FROM order_items WHERE id = ?').get(itemId)));
+});
+
+app.put('/api/order-items/:id', requireAuth, (req, res) => {
+  const existing = db.prepare('SELECT * FROM order_items WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'القطعة غير موجودة' });
+  const body = { ...existing, ...(req.body || {}) };
+  const error = validateItemInput(body);
+  if (error) return res.status(400).json({ error });
+  const trx = db.transaction(() => {
+    db.prepare(`
+      UPDATE order_items SET product_url = ?, product_name = ?, image_url = ?, color = ?, size = ?,
+        quantity = ?, customer_unit_price = ?, shein_unit_price = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      String(body.product_url || '').trim(), String(body.product_name).trim(),
+      String(body.image_url || '').trim(), String(body.color || '').trim(), String(body.size || '').trim(),
+      Number(body.quantity), Number(body.customer_unit_price), Number(body.shein_unit_price), body.status, existing.id
+    );
+    if (body.status !== existing.status) {
+      db.prepare(`
+        INSERT INTO order_item_status_history (item_id, old_status, new_status) VALUES (?, ?, ?)
+      `).run(existing.id, existing.status, body.status);
+    }
+    syncOrderTotals(existing.order_id);
+  });
+  trx();
+  res.json(hydrateItem(db.prepare('SELECT * FROM order_items WHERE id = ?').get(existing.id)));
+});
+
+app.get('/api/order-items/:id/history', requireAuth, (req, res) => {
+  const item = db.prepare('SELECT id FROM order_items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'القطعة غير موجودة' });
+  res.json(db.prepare(`
+    SELECT * FROM order_item_status_history WHERE item_id = ? ORDER BY changed_at DESC, id DESC
+  `).all(item.id));
 });
 
 app.post('/api/orders', requireAuth, (req, res) => {
@@ -148,6 +287,9 @@ app.put('/api/orders/:id', requireAuth, (req, res) => {
     customer_name, customer_phone, order_number, order_date,
     customer_value, shein_paid, customer_paid, currency, status, shipping_cost, shipment_id, notes
   } = req.body || {};
+  const hasItems = db.prepare('SELECT EXISTS(SELECT 1 FROM order_items WHERE order_id = ?) AS found').get(id).found === 1;
+  const effectiveCustomerValue = hasItems ? existing.customer_value : customer_value;
+  const effectiveSheinPaid = hasItems ? existing.shein_paid : shein_paid;
 
   db.prepare(`
     UPDATE orders SET
@@ -167,10 +309,11 @@ app.put('/api/orders/:id', requireAuth, (req, res) => {
     WHERE id = ?
   `).run(
     customer_name, customer_phone, order_number, order_date,
-    customer_value, shein_paid, customer_paid, currency, status,
+    effectiveCustomerValue, effectiveSheinPaid, customer_paid, currency, status,
     shipping_cost, shipment_id, notes,
     id
   );
+  if (hasItems) syncOrderTotals(id);
   res.json(db.prepare('SELECT * FROM orders WHERE id = ?').get(id));
 });
 
