@@ -1,0 +1,14 @@
+#am-shein-import-button {
+  position: fixed; right: 18px; bottom: 22px; z-index: 2147483647;
+  border: 0; border-radius: 999px; padding: 13px 18px;
+  background: #e91e63; color: #fff; font: 700 14px/1.4 Arial, sans-serif;
+  box-shadow: 0 6px 24px rgba(0,0,0,.25); cursor: pointer;
+}
+#am-shein-import-button:hover { background: #c2185b; }
+#am-shein-import-button:disabled { opacity: .65; cursor: wait; }
+.am-shein-cart-import-button {
+  display: block; width: 100%; margin-top: 8px; border: 1px solid #e91e63;
+  border-radius: 6px; padding: 8px 10px; background: #fff; color: #c2185b;
+  font: 700 13px/1.4 Arial, sans-serif; cursor: pointer;
+}
+.am-shein-cart-import-button:disabled { opacity: .65; cursor: wait; }

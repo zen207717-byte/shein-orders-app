@@ -331,6 +331,7 @@
           <input type="url" id="item-image-url" class="input" placeholder="https://...">
         </div>
         <div id="item-image-preview" class="item-image-preview form-span-2" style="display:none;"></div>
+        <div class="form-group form-span-2"><label>SKU</label><input type="text" id="item-sku" class="input" placeholder="اختياري"></div>
         <div class="form-group"><label>اللون</label><input type="text" id="item-color" class="input" placeholder="أسود"></div>
         <div class="form-group"><label>المقاس</label><input type="text" id="item-size" class="input" placeholder="M"></div>
         <div class="form-group"><label>الكمية *</label><input type="number" id="item-quantity" class="input" min="1" step="1" value="1" required></div>
@@ -347,6 +348,41 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" data-close="item-modal">إلغاء</button>
         <button type="submit" class="btn btn-primary">حفظ القطعة</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================== SHEIN IMPORT PREVIEW ======================== -->
+<div id="shein-import-modal" class="modal" style="display:none;">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content modal-content-lg">
+    <div class="modal-header">
+      <h2>معاينة قطعة SHEIN</h2>
+      <button class="icon-btn modal-close" data-close="shein-import-modal">✕</button>
+    </div>
+    <form id="shein-import-form" class="modal-body">
+      <div class="import-alert">راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.</div>
+      <div class="form-group">
+        <label>الزبونة / الطلب *</label>
+        <select id="import-order-id" class="input" required></select>
+      </div>
+      <div id="import-image-preview" class="item-image-preview" style="display:none;"></div>
+      <div class="item-form-grid">
+        <div class="form-group form-span-2"><label>اسم أو وصف المنتج *</label><input type="text" id="import-product-name" class="input" required></div>
+        <div class="form-group form-span-2"><label>رابط المنتج</label><input type="url" id="import-product-url" class="input"></div>
+        <div class="form-group form-span-2"><label>رابط الصورة</label><input type="url" id="import-image-url" class="input"></div>
+        <div class="form-group"><label>اللون</label><input type="text" id="import-color" class="input"></div>
+        <div class="form-group"><label>المقاس</label><input type="text" id="import-size" class="input"></div>
+        <div class="form-group"><label>الكمية *</label><input type="number" id="import-quantity" class="input" min="1" step="1" required></div>
+        <div class="form-group"><label>SKU</label><input type="text" id="import-sku" class="input"></div>
+        <div class="form-group"><label>السعر الظاهر للزبونة *</label><input type="number" id="import-customer-price" class="input" min="0" step="0.01" required></div>
+        <div class="form-group"><label>السعر الفعلي من SHEIN *</label><input type="number" id="import-shein-price" class="input" min="0" step="0.01" required></div>
+      </div>
+      <div class="auto-calc-box"><div class="auto-calc-row"><span>الحالة بعد الحفظ:</span><strong>في السلة</strong></div></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" data-close="shein-import-modal">إلغاء</button>
+        <button type="submit" class="btn btn-primary">حفظ القطعة في الطلب</button>
       </div>
     </form>
   </div>

@@ -101,6 +101,13 @@ server {
 - `POST /api/orders/:orderId/items` - إضافة قطعة للطلب
 - `PUT /api/order-items/:id` - تعديل بيانات القطعة أو حالتها
 - `GET /api/order-items/:id/history` - سجل تغييرات حالة القطعة
+- `POST /api/import/shein-item` - حفظ مسودة SHEIN بعد مراجعتها واختيار الطلب
+
+## إضافة SHEIN المحلية (تجريبية)
+
+مجلد `shein-importer` يحتوي إضافة Chrome بنظام Manifest V3. تقرأ البيانات الظاهرة
+من صفحة المنتج أو سلة SHEIN، ثم تفتح شاشة مراجعة داخل التطبيق لاختيار الزبونة والطلب.
+الإضافة لا تطلب صلاحية Cookies ولا تحتوي أي مفتاح سري.
 
 ### الشحنات
 - `GET /api/shipments` - قائمة الشحنات

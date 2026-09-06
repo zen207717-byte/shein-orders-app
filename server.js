@@ -192,12 +192,12 @@ app.post('/api/orders/:orderId/items', requireAuth, (req, res) => {
   const trx = db.transaction(() => {
     const info = db.prepare(`
       INSERT INTO order_items
-      (order_id, product_url, product_name, image_url, color, size, quantity,
+      (order_id, product_url, product_name, image_url, sku, color, size, quantity,
        customer_unit_price, shein_unit_price, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order.id, String(body.product_url || '').trim(), String(body.product_name).trim(),
-      String(body.image_url || '').trim(), String(body.color || '').trim(),
+      String(body.image_url || '').trim(), String(body.sku || '').trim(), String(body.color || '').trim(),
       String(body.size || '').trim(), Number(body.quantity), Number(body.customer_unit_price),
       Number(body.shein_unit_price), body.status || 'in_cart'
     );
@@ -220,12 +220,12 @@ app.put('/api/order-items/:id', requireAuth, (req, res) => {
   if (error) return res.status(400).json({ error });
   const trx = db.transaction(() => {
     db.prepare(`
-      UPDATE order_items SET product_url = ?, product_name = ?, image_url = ?, color = ?, size = ?,
+      UPDATE order_items SET product_url = ?, product_name = ?, image_url = ?, sku = ?, color = ?, size = ?,
         quantity = ?, customer_unit_price = ?, shein_unit_price = ?, status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       String(body.product_url || '').trim(), String(body.product_name).trim(),
-      String(body.image_url || '').trim(), String(body.color || '').trim(), String(body.size || '').trim(),
+      String(body.image_url || '').trim(), String(body.sku || '').trim(), String(body.color || '').trim(), String(body.size || '').trim(),
       Number(body.quantity), Number(body.customer_unit_price), Number(body.shein_unit_price), body.status, existing.id
     );
     if (body.status !== existing.status) {
@@ -245,6 +245,52 @@ app.get('/api/order-items/:id/history', requireAuth, (req, res) => {
   res.json(db.prepare(`
     SELECT * FROM order_item_status_history WHERE item_id = ? ORDER BY changed_at DESC, id DESC
   `).all(item.id));
+});
+
+// Receives a reviewed SHEIN draft from the app UI. The extension never sends auth data.
+app.post('/api/import/shein-item', requireAuth, (req, res) => {
+  const body = req.body || {};
+  const orderId = Number(body.order_id);
+  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(orderId);
+  if (!order) return res.status(404).json({ error: 'اختر طلبًا صحيحًا لإضافة القطعة' });
+
+  const item = {
+    product_url: body.product_url,
+    product_name: body.product_name,
+    image_url: body.image_url,
+    sku: body.sku,
+    color: body.color,
+    size: body.size,
+    quantity: body.quantity,
+    customer_unit_price: body.customer_unit_price,
+    shein_unit_price: body.shein_unit_price,
+    status: 'in_cart'
+  };
+  const error = validateItemInput(item);
+  if (error) return res.status(400).json({ error });
+
+  const trx = db.transaction(() => {
+    const info = db.prepare(`
+      INSERT INTO order_items
+      (order_id, product_url, product_name, image_url, sku, color, size, quantity,
+       customer_unit_price, shein_unit_price, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_cart')
+    `).run(
+      order.id, String(item.product_url || '').trim(), String(item.product_name).trim(),
+      String(item.image_url || '').trim(), String(item.sku || '').trim(),
+      String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
+      Number(item.customer_unit_price), Number(item.shein_unit_price)
+    );
+    db.prepare(`
+      INSERT INTO order_item_status_history (item_id, old_status, new_status)
+      VALUES (?, NULL, 'in_cart')
+    `).run(info.lastInsertRowid);
+    syncOrderTotals(order.id);
+    return info.lastInsertRowid;
+  });
+
+  const itemId = trx();
+  res.status(201).json(hydrateItem(db.prepare('SELECT * FROM order_items WHERE id = ?').get(itemId)));
 });
 
 app.post('/api/orders', requireAuth, (req, res) => {

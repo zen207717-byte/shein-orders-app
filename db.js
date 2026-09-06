@@ -61,6 +61,7 @@ db.exec(`
     product_url TEXT,
     product_name TEXT NOT NULL,
     image_url TEXT,
+    sku TEXT,
     color TEXT,
     size TEXT,
     quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
@@ -92,6 +93,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_order_items_status ON order_items(status);
   CREATE INDEX IF NOT EXISTS idx_item_history_item ON order_item_status_history(item_id, changed_at);
 `);
+
+// Safe additive migration for databases created before the SHEIN importer.
+const orderItemColumns = db.prepare('PRAGMA table_info(order_items)').all().map(column => column.name);
+if (!orderItemColumns.includes('sku')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN sku TEXT');
+}
 
 db.pragma('optimize');
 

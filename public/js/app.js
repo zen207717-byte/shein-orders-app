@@ -34,7 +34,8 @@ let state = {
   currentView: 'dashboard',
   selectedShipmentOrders: new Set(),
   manualCosts: {},
-  currentOrderItems: []
+  currentOrderItems: [],
+  pendingSheinImport: null
 };
 
 // ============== API HELPER ==============
@@ -120,6 +121,7 @@ function showApp(username) {
   document.getElementById('login-username').value = '';
   document.getElementById('login-password').value = '';
   loadAll();
+  handleSheinImportHash();
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -461,6 +463,7 @@ function openItemModal(itemId) {
     document.getElementById('item-product-url').value = item.product_url || '';
     document.getElementById('item-product-name').value = item.product_name || '';
     document.getElementById('item-image-url').value = item.image_url || '';
+    document.getElementById('item-sku').value = item.sku || '';
     document.getElementById('item-color').value = item.color || '';
     document.getElementById('item-size').value = item.size || '';
     document.getElementById('item-quantity').value = item.quantity;
@@ -510,6 +513,7 @@ document.getElementById('item-form').addEventListener('submit', async (e) => {
     product_url: document.getElementById('item-product-url').value.trim(),
     product_name: document.getElementById('item-product-name').value.trim(),
     image_url: document.getElementById('item-image-url').value.trim(),
+    sku: document.getElementById('item-sku').value.trim(),
     color: document.getElementById('item-color').value.trim(),
     size: document.getElementById('item-size').value.trim(),
     quantity: parseInt(document.getElementById('item-quantity').value, 10),
@@ -524,6 +528,78 @@ document.getElementById('item-form').addEventListener('submit', async (e) => {
     await loadOrderItems(orderId);
     await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
     toast(itemId ? 'تم تحديث القطعة' : 'تمت إضافة القطعة', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+});
+
+function decodeImportPayload(value) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const bytes = Uint8Array.from(atob(normalized), char => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function handleSheinImportHash() {
+  const prefix = '#shein-import=';
+  if (!location.hash.startsWith(prefix) || !state.authenticated) return;
+  try {
+    const payload = decodeImportPayload(location.hash.slice(prefix.length));
+    history.replaceState(null, '', location.pathname + location.search);
+    state.pendingSheinImport = payload;
+    if (!state.orders.length) await loadOrders();
+    openSheinImportPreview(payload);
+  } catch (_) {
+    history.replaceState(null, '', location.pathname + location.search);
+    toast('تعذر قراءة بيانات القطعة من الإضافة', 'error');
+  }
+}
+
+function openSheinImportPreview(item) {
+  const select = document.getElementById('import-order-id');
+  select.innerHTML = '<option value="">اختر الزبونة والطلب</option>' + state.orders.map(order =>
+    `<option value="${order.id}">${escapeHtml(order.customer_name)} — ${escapeHtml(order.order_number || ('طلب #' + order.id))}</option>`
+  ).join('');
+  document.getElementById('import-product-name').value = item.product_name || '';
+  document.getElementById('import-product-url').value = item.product_url || '';
+  document.getElementById('import-image-url').value = item.image_url || '';
+  document.getElementById('import-color').value = item.color || '';
+  document.getElementById('import-size').value = item.size || '';
+  document.getElementById('import-quantity').value = Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+  document.getElementById('import-sku').value = item.sku || '';
+  document.getElementById('import-customer-price').value = Number.isFinite(Number(item.price)) ? Number(item.price) : '';
+  document.getElementById('import-shein-price').value = Number.isFinite(Number(item.price)) ? Number(item.price) : '';
+  updateImportImagePreview();
+  document.getElementById('shein-import-modal').style.display = 'flex';
+}
+
+function updateImportImagePreview() {
+  const url = document.getElementById('import-image-url').value.trim();
+  const preview = document.getElementById('import-image-preview');
+  preview.style.display = url ? 'flex' : 'none';
+  preview.innerHTML = url ? `<img src="${escapeHtml(url)}" alt="معاينة صورة المنتج" onerror="this.parentElement.style.display='none'">` : '';
+}
+document.getElementById('import-image-url').addEventListener('input', updateImportImagePreview);
+
+document.getElementById('shein-import-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const body = {
+    order_id: Number(document.getElementById('import-order-id').value),
+    product_name: document.getElementById('import-product-name').value.trim(),
+    product_url: document.getElementById('import-product-url').value.trim(),
+    image_url: document.getElementById('import-image-url').value.trim(),
+    color: document.getElementById('import-color').value.trim(),
+    size: document.getElementById('import-size').value.trim(),
+    quantity: Number(document.getElementById('import-quantity').value),
+    sku: document.getElementById('import-sku').value.trim(),
+    customer_unit_price: Number(document.getElementById('import-customer-price').value),
+    shein_unit_price: Number(document.getElementById('import-shein-price').value)
+  };
+  try {
+    await api('/import/shein-item', { method: 'POST', body });
+    state.pendingSheinImport = null;
+    closeModal('shein-import-modal');
+    await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
+    toast('تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');
   } catch (err) {
     toast(err.message, 'error');
   }
