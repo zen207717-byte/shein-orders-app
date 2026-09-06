@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#e91e63">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>حسابات أم مروان – SHEIN</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍️</text></svg>">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍️</text></svg>">
+</head>
+<body>
+
+<!-- ======================== LOGIN ======================== -->
+<div id="login-screen" class="screen login-screen">
+  <div class="login-box">
+    <div class="login-logo">🛍️</div>
+    <h1 class="login-title">حسابات أم مروان</h1>
+    <p class="login-subtitle">إدارة طلبات SHEIN</p>
+    <form id="login-form" class="login-form">
+      <div class="form-group">
+        <label for="login-username">اسم المستخدم</label>
+        <input type="text" id="login-username" autocomplete="username" required placeholder="أدخل اسم المستخدم">
+      </div>
+      <div class="form-group">
+        <label for="login-password">كلمة المرور</label>
+        <input type="password" id="login-password" autocomplete="current-password" required placeholder="أدخل كلمة المرور">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block btn-lg">دخول</button>
+      <div id="login-error" class="error-msg"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================== APP ======================== -->
+<div id="app-screen" class="screen app-screen" style="display:none;">
+
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <button id="menu-btn" class="icon-btn" aria-label="القائمة">☰</button>
+    <h1 class="topbar-title" id="topbar-title">لوحة التحكم</h1>
+    <button id="logout-btn" class="icon-btn" aria-label="خروج">⏻</button>
+  </header>
+
+  <!-- SIDE MENU -->
+  <div id="side-menu" class="side-menu">
+    <div class="side-menu-header">
+      <div class="side-menu-avatar">👤</div>
+      <div>
+        <div class="side-menu-name" id="side-menu-username">المستخدم</div>
+        <div class="side-menu-sub">حسابات أم مروان</div>
+      </div>
+    </div>
+    <nav class="side-menu-nav">
+      <a href="#" data-view="dashboard" class="menu-item active">📊 لوحة التحكم</a>
+      <a href="#" data-view="orders" class="menu-item">📦 الطلبات</a>
+      <a href="#" data-view="customers" class="menu-item">👥 الزبائن</a>
+      <a href="#" data-view="shipments" class="menu-item">🚚 الشحنات</a>
+      <a href="#" data-view="settings" class="menu-item">⚙️ الإعدادات</a>
+    </nav>
+    <div class="side-menu-footer">
+      <button id="side-logout" class="btn btn-outline btn-block">تسجيل الخروج</button>
+    </div>
+  </div>
+  <div id="menu-overlay" class="menu-overlay"></div>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view active">
+      <div class="stats-grid">
+        <div class="stat-card stat-primary">
+          <div class="stat-icon">📦</div>
+          <div class="stat-value" id="stat-order-count">0</div>
+          <div class="stat-label">إجمالي الطلبات</div>
+        </div>
+        <div class="stat-card stat-info">
+          <div class="stat-icon">👥</div>
+          <div class="stat-value" id="stat-customer-count">0</div>
+          <div class="stat-label">عدد الزبائن</div>
+        </div>
+        <div class="stat-card stat-success">
+          <div class="stat-icon">💰</div>
+          <div class="stat-value" id="stat-total-value">0</div>
+          <div class="stat-label">قيمة الطلبات (SAR)</div>
+        </div>
+        <div class="stat-card stat-warning">
+          <div class="stat-icon">💳</div>
+          <div class="stat-value" id="stat-shein-paid">0</div>
+          <div class="stat-label">المدفوع لـ SHEIN (SAR)</div>
+        </div>
+        <div class="stat-card stat-purple">
+          <div class="stat-icon">📈</div>
+          <div class="stat-value" id="stat-commission">0</div>
+          <div class="stat-label">إجمالي العمولات (SAR)</div>
+        </div>
+        <div class="stat-card stat-orange">
+          <div class="stat-icon">🚚</div>
+          <div class="stat-value" id="stat-shipping">0</div>
+          <div class="stat-label">مصاريف الشحن (SAR)</div>
+        </div>
+        <div class="stat-card stat-teal">
+          <div class="stat-icon">💵</div>
+          <div class="stat-value" id="stat-received">0</div>
+          <div class="stat-label">المستلم من الزبائن (SAR)</div>
+        </div>
+        <div class="stat-card stat-danger">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-value" id="stat-remaining">0</div>
+          <div class="stat-label">الديون المتبقية (SAR)</div>
+        </div>
+      </div>
+
+      <h2 class="section-title">حالة الطلبات</h2>
+      <div class="status-grid" id="status-grid"></div>
+
+      <h2 class="section-title">التقرير الشهري</h2>
+      <div class="monthly-list" id="monthly-list"></div>
+    </section>
+
+    <!-- ORDERS -->
+    <section id="view-orders" class="view">
+      <div class="page-actions">
+        <button id="add-order-btn" class="btn btn-primary btn-lg">➕ إضافة طلب جديد</button>
+        <button id="export-orders-btn" class="btn btn-outline">📥 تصدير CSV</button>
+      </div>
+
+      <div class="filters">
+        <input type="text" id="orders-search" class="input" placeholder="🔍 بحث بالاسم أو رقم الطلب...">
+        <select id="orders-status-filter" class="input">
+          <option value="">جميع الحالات</option>
+        </select>
+      </div>
+
+      <div id="orders-list" class="cards-list"></div>
+    </section>
+
+    <!-- CUSTOMERS -->
+    <section id="view-customers" class="view">
+      <div class="page-actions">
+        <button id="export-customers-btn" class="btn btn-outline">📥 تصدير CSV</button>
+      </div>
+      <div class="filters">
+        <input type="text" id="customers-search" class="input" placeholder="🔍 بحث عن زبونة...">
+      </div>
+      <div id="customers-list" class="cards-list"></div>
+    </section>
+
+    <!-- SHIPMENTS -->
+    <section id="view-shipments" class="view">
+      <div class="page-actions">
+        <button id="add-shipment-btn" class="btn btn-primary btn-lg">➕ إنشاء شحنة جديدة</button>
+      </div>
+      <div id="shipments-list" class="cards-list"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view">
+      <div class="card">
+        <h2 class="card-title">💱 سعر الصرف</h2>
+        <p class="card-desc">سعر صرف الريال السعودي مقابل الريال اليمني</p>
+        <div class="form-group">
+          <label>1 ريال سعودي = <span id="rate-preview">?</span> ريال يمني</label>
+          <input type="number" id="exchange-rate" class="input" step="0.01" min="0" placeholder="مثال: 425">
+        </div>
+        <button id="save-settings-btn" class="btn btn-primary">حفظ سعر الصرف</button>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">🔐 تغيير كلمة المرور</h2>
+        <form id="change-password-form">
+          <div class="form-group">
+            <label>كلمة المرور الحالية</label>
+            <input type="password" id="current-password" class="input" required>
+          </div>
+          <div class="form-group">
+            <label>كلمة المرور الجديدة</label>
+            <input type="password" id="new-password" class="input" required minlength="4">
+          </div>
+          <div class="form-group">
+            <label>تأكيد كلمة المرور الجديدة</label>
+            <input type="password" id="confirm-password" class="input" required minlength="4">
+          </div>
+          <button type="submit" class="btn btn-primary">تغيير كلمة المرور</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">💾 النسخ الاحتياطي</h2>
+        <p class="card-desc">قم بتصدير بياناتك كملف CSV يمكن فتحه في Excel</p>
+        <div class="backup-actions">
+          <a href="/api/export/orders" class="btn btn-outline" download>📦 تصدير الطلبات</a>
+          <a href="/api/export/customers" class="btn btn-outline" download>👥 تصدير الزبائن</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">ℹ️ عن التطبيق</h2>
+        <p class="card-desc">حسابات أم مروان – SHEIN</p>
+        <p class="card-desc">تطبيق إدارة طلبات SHEIN - الإصدار 1.0</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- BOTTOM TAB BAR (mobile) -->
+  <nav class="tabbar">
+    <a href="#" data-view="dashboard" class="tab active">📊<span>الرئيسية</span></a>
+    <a href="#" data-view="orders" class="tab">📦<span>الطلبات</span></a>
+    <a href="#" data-view="customers" class="tab">👥<span>الزبائن</span></a>
+    <a href="#" data-view="shipments" class="tab">🚚<span>الشحنات</span></a>
+    <a href="#" data-view="settings" class="tab">⚙️<span>الإعدادات</span></a>
+  </nav>
+
+</div>
+
+<!-- ======================== ORDER MODAL ======================== -->
+<div id="order-modal" class="modal" style="display:none;">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2 id="order-modal-title">إضافة طلب جديد</h2>
+      <button class="icon-btn modal-close" data-close="order-modal">✕</button>
+    </div>
+    <form id="order-form" class="modal-body">
+      <input type="hidden" id="order-id">
+      <div class="form-group">
+        <label>اسم الزبونة *</label>
+        <input type="text" id="order-customer-name" class="input" required>
+      </div>
+      <div class="form-group">
+        <label>رقم الهاتف</label>
+        <input type="tel" id="order-customer-phone" class="input" placeholder="مثال: 777123456">
+      </div>
+      <div class="form-group">
+        <label>رقم الطلب</label>
+        <input type="text" id="order-number" class="input" placeholder="رقم طلب SHEIN">
+      </div>
+      <div class="form-group">
+        <label>تاريخ الطلب</label>
+        <input type="date" id="order-date" class="input">
+      </div>
+      <div class="form-group">
+        <label>العملة</label>
+        <select id="order-currency" class="input">
+          <option value="SAR">ريال سعودي (SAR)</option>
+          <option value="YER">ريال يمني (YER)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>قيمة الطلب على الزبونة</label>
+        <input type="number" id="order-customer-value" class="input" step="0.01" min="0" placeholder="0.00">
+      </div>
+      <div class="form-group">
+        <label>المدفوع فعليًا لـ SHEIN (بعد الخصومات)</label>
+        <input type="number" id="order-shein-paid" class="input" step="0.01" min="0" placeholder="0.00">
+      </div>
+      <div class="auto-calc-box" id="auto-calc">
+        <div class="auto-calc-row">
+          <span>العمولة:</span>
+          <strong id="auto-commission">0.00</strong>
+        </div>
+        <div class="auto-calc-row">
+          <span>نسبة العمولة:</span>
+          <strong id="auto-commission-rate">0%</strong>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>المبلغ الذي دفعته الزبونة</label>
+        <input type="number" id="order-customer-paid" class="input" step="0.01" min="0" placeholder="0.00">
+      </div>
+      <div class="auto-calc-box">
+        <div class="auto-calc-row">
+          <span>المتبقي على الزبونة:</span>
+          <strong id="auto-remaining">0.00</strong>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>الحالة</label>
+        <select id="order-status" class="input"></select>
+      </div>
+      <div class="form-group">
+        <label>ملاحظات</label>
+        <textarea id="order-notes" class="input" rows="2" placeholder="ملاحظات اختيارية"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" data-close="order-modal">إلغاء</button>
+        <button type="submit" class="btn btn-primary">حفظ الطلب</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================== SHIPMENT MODAL ======================== -->
+<div id="shipment-modal" class="modal" style="display:none;">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>إنشاء شحنة جديدة</h2>
+      <button class="icon-btn modal-close" data-close="shipment-modal">✕</button>
+    </div>
+    <form id="shipment-form" class="modal-body">
+      <div class="form-group">
+        <label>اسم الشحنة *</label>
+        <input type="text" id="shipment-name" class="input" placeholder="مثال: شحنة 2024-01" required>
+      </div>
+      <div class="form-group">
+        <label>تكلفة الشحن الإجمالية</label>
+        <input type="number" id="shipment-total-cost" class="input" step="0.01" min="0" placeholder="0.00" value="0">
+      </div>
+      <div class="form-group">
+        <label>العملة</label>
+        <select id="shipment-currency" class="input">
+          <option value="SAR">ريال سعودي (SAR)</option>
+          <option value="YER">ريال يمني (YER)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>طريقة توزيع التكلفة</label>
+        <div class="radio-group">
+          <label class="radio-card">
+            <input type="radio" name="distribution" value="equal" checked>
+            <span>بالتساوي بين الطلبات</span>
+          </label>
+          <label class="radio-card">
+            <input type="radio" name="distribution" value="manual">
+            <span>إدخال تكلفة كل طلب يدويًا</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>الطلبات (اختر طلبات بدون شحنة)</label>
+        <div id="shipment-orders-list" class="shipment-orders-pick"></div>
+      </div>
+      <div id="manual-costs-section" style="display:none;">
+        <div class="form-group">
+          <label>تكلفة كل طلب (عند التوزيع اليدوي)</label>
+          <div id="manual-costs-list"></div>
+          <div class="auto-calc-box" style="margin-top:8px;">
+            <div class="auto-calc-row">
+              <span>إجمالي التكاليف المدخلة:</span>
+              <strong id="manual-total">0.00</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>ملاحظات</label>
+        <textarea id="shipment-notes" class="input" rows="2" placeholder="ملاحظات اختيارية"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" data-close="shipment-modal">إلغاء</button>
+        <button type="submit" class="btn btn-primary">إنشاء الشحنة</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================== CUSTOMER MODAL ======================== -->
+<div id="customer-modal" class="modal" style="display:none;">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content modal-content-lg">
+    <div class="modal-header">
+      <h2 id="customer-modal-title">تفاصيل الزبونة</h2>
+      <button class="icon-btn modal-close" data-close="customer-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="customer-summary" id="customer-summary"></div>
+      <h3 class="section-title">جميع الطلبات</h3>
+      <div id="customer-orders" class="cards-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================== TOAST ======================== -->
+<div id="toast" class="toast"></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
