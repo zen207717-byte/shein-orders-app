@@ -38,6 +38,8 @@ let state = {
   pendingSheinImport: null
 };
 
+const SHEIN_IMPORT_STORAGE_KEY = 'pendingSheinImport';
+
 // ============== API HELPER ==============
 async function api(path, options = {}) {
   const opts = {
@@ -111,7 +113,7 @@ function showLogin() {
   document.getElementById('app-screen').style.display = 'none';
 }
 
-function showApp(username) {
+async function showApp(username) {
   state.authenticated = true;
   state.username = username;
   document.getElementById('login-screen').style.display = 'none';
@@ -120,8 +122,8 @@ function showApp(username) {
   document.getElementById('login-error').textContent = '';
   document.getElementById('login-username').value = '';
   document.getElementById('login-password').value = '';
-  loadAll();
-  handleSheinImportHash();
+  await loadAll();
+  await openPendingSheinImport();
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -131,7 +133,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   document.getElementById('login-error').textContent = '';
   try {
     const res = await api('/auth/login', { method: 'POST', body: { username, password } });
-    showApp(res.username);
+    await showApp(res.username);
     toast('أهلاً ' + res.username, 'success');
   } catch (err) {
     document.getElementById('login-error').textContent = err.message;
@@ -153,7 +155,7 @@ async function logout() {
   try {
     const status = await api('/auth/status');
     if (status.authenticated) {
-      showApp(status.username);
+      await showApp(status.username);
     } else {
       showLogin();
     }
@@ -539,20 +541,36 @@ function decodeImportPayload(value) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-async function handleSheinImportHash() {
-  const prefix = '#shein-import=';
-  if (!location.hash.startsWith(prefix) || !state.authenticated) return;
+function captureSheinImportDraft() {
+  const hashPrefix = '#shein-import=';
+  const queryPayload = location.pathname === '/import/shein'
+    ? new URLSearchParams(location.search).get('data')
+    : null;
+  const encoded = queryPayload || (location.hash.startsWith(hashPrefix) ? location.hash.slice(hashPrefix.length) : null);
+  if (!encoded) return;
   try {
-    const payload = decodeImportPayload(location.hash.slice(prefix.length));
-    history.replaceState(null, '', location.pathname + location.search);
+    sessionStorage.setItem(SHEIN_IMPORT_STORAGE_KEY, JSON.stringify(decodeImportPayload(encoded)));
+  } catch (_) {
+    sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
+  }
+  history.replaceState(null, '', '/');
+}
+
+async function openPendingSheinImport() {
+  if (!state.authenticated) return;
+  const stored = sessionStorage.getItem(SHEIN_IMPORT_STORAGE_KEY);
+  if (!stored) return;
+  try {
+    const payload = JSON.parse(stored);
     state.pendingSheinImport = payload;
-    if (!state.orders.length) await loadOrders();
     openSheinImportPreview(payload);
   } catch (_) {
-    history.replaceState(null, '', location.pathname + location.search);
+    sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
     toast('تعذر قراءة بيانات القطعة من الإضافة', 'error');
   }
 }
+
+captureSheinImportDraft();
 
 function openSheinImportPreview(item) {
   const select = document.getElementById('import-order-id');
@@ -597,6 +615,7 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
   try {
     await api('/import/shein-item', { method: 'POST', body });
     state.pendingSheinImport = null;
+    sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
     closeModal('shein-import-modal');
     await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
     toast('تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');
