@@ -27,13 +27,19 @@
 
   function scrapeVisibleProduct(root = document) {
     const isWholePage = root === document;
-    const productName = firstText(root, ['h1', '[data-testid*="product-title"]', '[class*="goods-title"]', '[class*="product-name"]', 'a[title]']);
-    const productLink = root.querySelector('a[href*="shein.com"], a[href*="-p-"]')?.href || location.href.split('#')[0];
-    const imageUrl = (isWholePage ? attr(document, 'meta[property="og:image"]', 'content') : '') || attr(root, 'img', 'src');
-    const priceText = firstText(root, ['[data-testid*="price"]', '.product-intro__head-mainprice', '[class*="salePrice"]', '[class*="price"]']);
-    const color = selectedText(root, ['[data-attr-name*="Color"] [role="radio"]', '[class*="color"] [role="radio"]', '[class*="color"] li']) || firstText(root, ['[class*="color"]']);
-    const size = selectedText(root, ['[data-attr-name*="Size"] [role="radio"]', '[class*="size"] [role="radio"]', '[class*="size"] li']) || firstText(root, ['[class*="size"]']);
-    const quantityValue = root.querySelector('input[type="number"], input[class*="quantity"]')?.value;
+    const cartTitle = root.querySelector('.bsc-cart-item-goods-title__content[title], a[title]');
+    const productName = cartTitle?.getAttribute('title') || firstText(root, ['h1', '[data-testid*="product-title"]', '[class*="goods-title"]', '[class*="product-name"]', 'a[title]']);
+    const readableLink = cartTitle?.getAttribute('href') || root.querySelector('a[href*="shein.com"], a[href*="-p-"]')?.href || '';
+    const productLink = readableLink || (isWholePage ? location.href.split('#')[0] : '');
+    const rawImageUrl = (isWholePage ? attr(document, 'meta[property="og:image"]', 'content') : '')
+      || attr(root, 'img.j-cart-main-img', 'src') || attr(root, 'img', 'src');
+    const imageUrl = rawImageUrl ? new URL(rawImageUrl, location.href).href : '';
+    const priceText = firstText(root, ['.bsc-cart-item-goods-price-v2__sale-price', '.bsc-cart-item-mini__price', '[data-testid*="price"]', '.product-intro__head-mainprice', '[class*="salePrice"]', '[class*="price"]']);
+    const cartOption = root.querySelector('.bsc-cart-item-goods-sale-attr[aria-label]')?.getAttribute('aria-label') || '';
+    const [cartColor = '', cartSize = ''] = cartOption.split('/').map(value => value.trim());
+    const color = cartColor || selectedText(root, ['[data-attr-name*="Color"] [role="radio"]', '[class*="color"] [role="radio"]', '[class*="color"] li']) || firstText(root, ['[class*="color"]']);
+    const size = cartSize || selectedText(root, ['[data-attr-name*="Size"] [role="radio"]', '[class*="size"] [role="radio"]', '[class*="size"] li']) || firstText(root, ['[class*="size"]']);
+    const quantityValue = root.querySelector('input[aria-label="Quantity input"], input[type="number"], input[class*="quantity"]')?.value;
     const skuText = firstText(root, ['[data-testid*="sku"]', '[class*="sku"]']);
     const skuMatch = skuText.match(/(?:SKU|رمز المنتج)\s*[:：]?\s*([\w-]+)/i);
     return {
@@ -70,27 +76,21 @@
   }
 
   function findCartItemRows() {
-    const productLinks = [...document.querySelectorAll(
-      'a[href*="-p-"], a[href*="/product/"], a[href*="goods_id="]'
-    )];
+    const quantityInputs = [...document.querySelectorAll('input[aria-label="Quantity input"]')];
     const rows = new Set();
 
-    productLinks.forEach(link => {
-      let node = link.parentElement;
+    quantityInputs.forEach(quantityInput => {
+      let node = quantityInput.parentElement;
       let levels = 0;
       while (node && node !== document.body && levels < 10) {
-        const hasImage = Boolean(node.querySelector('img'));
+        const hasTitleLink = Boolean(node.querySelector('a[title]'));
+        const hasImage = Boolean(node.querySelector('img.j-cart-main-img'));
         const hasPrice = Boolean(node.querySelector(
-          '[class*="price" i], [data-testid*="price" i], [class*="amount" i]'
-        )) || /(?:\$|US\$|SAR|ر\.س)\s*\d|\d[\d,.]*\s*(?:\$|SAR|ر\.س)/i.test(text(node));
-        const hasQty = /(?:^|\s)Qty\s*:\s*\d+/i.test(text(node)) || Boolean(node.querySelector(
-          '[aria-label*="quantity" i], [data-testid*="quantity" i], '
-          + '[class*="quantity" i], [class*="qty" i]'
+          '.bsc-cart-item-goods-price-v2__sale-price, .bsc-cart-item-mini__price, [class*="price" i]'
         ));
 
-        // On the current us.shein.com/cart DOM, the reliable card signature is
-        // product link + image + price + the visible "Qty: N" control.
-        if (hasImage && hasPrice && hasQty) {
+        if (hasTitleLink && hasImage && hasPrice &&
+            node.querySelectorAll('input[aria-label="Quantity input"]').length === 1) {
           rows.add(node);
           break;
         }
@@ -105,15 +105,9 @@
   }
 
   function findQtyActions(row) {
-    const controls = [...row.querySelectorAll(
-      'button, [role="button"], [role="combobox"], select, '
-      + '[aria-label*="quantity" i], [data-testid*="quantity" i], '
-      + '[class*="quantity" i], [class*="qty" i]'
-    )];
-    const qtyControl = controls.find(control =>
-      /^\s*Qty\s*:\s*\d+/i.test(text(control)) || /^\s*الكمية\s*[:：]?\s*\d*/.test(text(control))
-    );
-    return qtyControl?.parentElement || row;
+    return row.querySelector('.bsc-cart-item-goods-qty')
+      || row.querySelector('input[aria-label="Quantity input"]')?.parentElement?.parentElement
+      || row;
   }
 
   function addCartButtons() {
