@@ -8,19 +8,20 @@
 #am-shein-import-button:disabled { opacity: .65; cursor: wait; }
 
 .am-shein-importer__cart-mount {
-  position: static !important; inset: auto !important; display: flex !important;
+  position: static !important; inset: auto !important; display: inline-flex !important;
   flex: 0 0 auto !important; clear: both !important; align-self: flex-end !important;
   width: auto !important; max-width: 100% !important; height: auto !important;
-  margin: 6px 0 0 !important; padding: 0 !important;
-  justify-content: flex-start !important; pointer-events: none !important;
+  margin: 0 0 0 8px !important; padding: 0 !important;
+  vertical-align: middle !important; justify-content: flex-start !important;
+  pointer-events: none !important;
 }
 .am-shein-importer__cart-button {
   position: static !important; inset: auto !important; z-index: auto !important;
   display: inline-flex !important; width: auto !important; min-width: 0 !important;
   max-width: 100% !important; height: auto !important; margin: 0 !important;
   border: 1px solid #e91e63 !important; border-radius: 5px !important;
-  padding: 5px 9px !important; background: #fff !important; color: #c2185b !important;
-  font: 700 12px/1.35 Arial, sans-serif !important; text-align: center !important;
+  padding: 4px 7px !important; background: #fff !important; color: #c2185b !important;
+  font: 700 11px/1.3 Arial, sans-serif !important; text-align: center !important;
   white-space: normal !important; cursor: pointer !important; box-shadow: none !important;
   transform: none !important; pointer-events: auto !important;
 }

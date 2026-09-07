@@ -83,17 +83,14 @@
         const hasPrice = Boolean(node.querySelector(
           '[class*="price" i], [data-testid*="price" i], [class*="amount" i]'
         )) || /(?:\$|US\$|SAR|ر\.س)\s*\d|\d[\d,.]*\s*(?:\$|SAR|ر\.س)/i.test(text(node));
-        const hasCartControl = Boolean(node.querySelector(
-          'input[type="checkbox"], [role="checkbox"], input[type="number"], '
+        const hasQty = /(?:^|\s)Qty\s*:\s*\d+/i.test(text(node)) || Boolean(node.querySelector(
+          '[aria-label*="quantity" i], [data-testid*="quantity" i], '
           + '[class*="quantity" i], [class*="qty" i]'
         ));
-        const hasItemIdentity = node.matches(
-          '[data-cart-item-id], [data-goods-id], [data-testid*="cart-item" i], '
-          + '[class~="cart-item"], [class*="cartItem"], [class*="product-item" i], '
-          + '[class*="productItem"], .product-list__item, li'
-        );
 
-        if (hasImage && hasPrice && hasCartControl && hasItemIdentity) {
+        // On the current us.shein.com/cart DOM, the reliable card signature is
+        // product link + image + price + the visible "Qty: N" control.
+        if (hasImage && hasPrice && hasQty) {
           rows.add(node);
           break;
         }
@@ -107,12 +104,24 @@
     );
   }
 
+  function findQtyActions(row) {
+    const controls = [...row.querySelectorAll(
+      'button, [role="button"], [role="combobox"], select, '
+      + '[aria-label*="quantity" i], [data-testid*="quantity" i], '
+      + '[class*="quantity" i], [class*="qty" i]'
+    )];
+    const qtyControl = controls.find(control =>
+      /^\s*Qty\s*:\s*\d+/i.test(text(control)) || /^\s*الكمية\s*[:：]?\s*\d*/.test(text(control))
+    );
+    return qtyControl?.parentElement || row;
+  }
+
   function addCartButtons() {
     findCartItemRows().forEach(row => {
-      const existingButton = row.querySelector(`:scope > .${CART_MOUNT_CLASS} > .${CART_BUTTON_CLASS}`);
+      const existingButton = row.querySelector(`.${CART_MOUNT_CLASS} > .${CART_BUTTON_CLASS}`);
       if (row.getAttribute(CART_MOUNTED_ATTR) === '1' && existingButton) return;
 
-      row.querySelectorAll(`:scope > .${CART_MOUNT_CLASS}`).forEach(mount => mount.remove());
+      row.querySelectorAll(`.${CART_MOUNT_CLASS}`).forEach(mount => mount.remove());
       row.setAttribute(CART_MOUNTED_ATTR, '1');
 
       const mount = document.createElement('div');
@@ -127,7 +136,7 @@
         openImport(button, row);
       });
       mount.appendChild(button);
-      row.appendChild(mount);
+      findQtyActions(row).appendChild(mount);
     });
   }
 
