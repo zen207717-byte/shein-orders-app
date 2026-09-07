@@ -15,5 +15,7 @@ services:
         value: 22
       - key: SESSION_SECRET
         generateValue: true
+      - key: INITIAL_ADMIN_PASSWORD
+        generateValue: true
       - key: PORT
         value: 10000

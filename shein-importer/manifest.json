@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "مستورد SHEIN - حسابات أم مروان",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ينقل بيانات القطعة الظاهرة من SHEIN إلى شاشة مراجعة داخل تطبيق حسابات أم مروان.",
   "permissions": ["storage"],
   "host_permissions": [

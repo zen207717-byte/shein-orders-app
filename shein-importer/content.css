@@ -27,3 +27,9 @@
 }
 .am-shein-importer__cart-button:hover { background: #fff5f8 !important; }
 .am-shein-importer__cart-button:disabled { opacity: .65 !important; cursor: wait !important; }
+.am-shein-importer__cart-button--synced {
+  border-color: #168a45 !important; background: #eaf8ef !important; color: #116b37 !important;
+}
+.am-shein-importer__cart-button--changed {
+  border-color: #e47b09 !important; background: #fff4e5 !important; color: #a95100 !important;
+}

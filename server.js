@@ -10,12 +10,16 @@ const { db, getSetting, setSetting } = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET || SESSION_SECRET.length < 16) {
+  throw new Error('SESSION_SECRET must be set to at least 16 characters');
+}
 
 // Middleware
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'shein-app-secret-change-in-production-' + Math.random().toString(36),
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -93,6 +97,10 @@ function validateItemInput(body) {
   if (!isHttpUrl(body.product_url)) return 'رابط المنتج غير صحيح';
   if (!isHttpUrl(body.image_url)) return 'رابط الصورة غير صحيح';
   return null;
+}
+
+function validSyncValue(value, maxLength = 300, minLength = 3) {
+  return typeof value === 'string' && value.length >= minLength && value.length <= maxLength && /^[A-Za-z0-9:._-]+$/.test(value);
 }
 
 // ========== AUTH ROUTES ==========
@@ -247,9 +255,30 @@ app.get('/api/order-items/:id/history', requireAuth, (req, res) => {
   `).all(item.id));
 });
 
+// A receipt is an opaque, one-time capability. It exposes no customer/order data.
+app.get('/api/import/shein-status/:token', (req, res) => {
+  if (!validSyncValue(req.params.token, 100, 20)) return res.status(400).json({ error: 'invalid_receipt' });
+  const receipt = db.prepare(`
+    SELECT sync_key, source_signature, item_id
+    FROM shein_import_receipts WHERE receipt_token = ?
+  `).get(req.params.token);
+  if (!receipt) return res.json({ status: 'pending' });
+  res.json({ status: 'synced', ...receipt });
+});
+
+app.get('/api/import/shein-item/:syncKey', requireAuth, (req, res) => {
+  const item = db.prepare('SELECT * FROM order_items WHERE sync_key = ?').get(req.params.syncKey);
+  if (!item) return res.status(404).json({ error: 'not_found' });
+  res.json(hydrateItem(item));
+});
+
 // Receives a reviewed SHEIN draft from the app UI. The extension never sends auth data.
 app.post('/api/import/shein-item', requireAuth, (req, res) => {
   const body = req.body || {};
+  if (!validSyncValue(body.sync_key, 300, 8) || !validSyncValue(body.source_signature) ||
+      !validSyncValue(body.receipt_token, 100, 20)) {
+    return res.status(400).json({ error: 'بيانات المزامنة غير صحيحة' });
+  }
   const orderId = Number(body.order_id);
   const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(orderId);
   if (!order) return res.status(404).json({ error: 'اختر طلبًا صحيحًا لإضافة القطعة' });
@@ -270,23 +299,43 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
   if (error) return res.status(400).json({ error });
 
   const trx = db.transaction(() => {
-    const info = db.prepare(`
-      INSERT INTO order_items
-      (order_id, product_url, product_name, image_url, sku, color, size, quantity,
-       customer_unit_price, shein_unit_price, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_cart')
-    `).run(
-      order.id, String(item.product_url || '').trim(), String(item.product_name).trim(),
-      String(item.image_url || '').trim(), String(item.sku || '').trim(),
-      String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
-      Number(item.customer_unit_price), Number(item.shein_unit_price)
-    );
-    db.prepare(`
-      INSERT INTO order_item_status_history (item_id, old_status, new_status)
-      VALUES (?, NULL, 'in_cart')
-    `).run(info.lastInsertRowid);
-    syncOrderTotals(order.id);
-    return info.lastInsertRowid;
+    const existing = db.prepare('SELECT * FROM order_items WHERE sync_key = ?').get(body.sync_key);
+    let itemId;
+    if (existing) {
+      itemId = existing.id;
+      db.prepare(`
+        UPDATE order_items SET product_url = ?, product_name = ?, image_url = ?, sku = ?,
+          color = ?, size = ?, quantity = ?, customer_unit_price = ?, shein_unit_price = ?,
+          source_signature = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        String(item.product_url || '').trim(), String(item.product_name).trim(),
+        String(item.image_url || '').trim(), String(item.sku || '').trim(),
+        String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
+        Number(item.customer_unit_price), Number(item.shein_unit_price), body.source_signature, itemId
+      );
+      syncOrderTotals(existing.order_id);
+    } else {
+      const info = db.prepare(`
+        INSERT INTO order_items
+        (order_id, product_url, product_name, image_url, sku, color, size, quantity,
+         customer_unit_price, shein_unit_price, status, sync_key, source_signature)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_cart', ?, ?)
+      `).run(
+        order.id, String(item.product_url || '').trim(), String(item.product_name).trim(),
+        String(item.image_url || '').trim(), String(item.sku || '').trim(),
+        String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
+        Number(item.customer_unit_price), Number(item.shein_unit_price), body.sync_key, body.source_signature
+      );
+      itemId = info.lastInsertRowid;
+      db.prepare(`INSERT INTO order_item_status_history (item_id, old_status, new_status)
+        VALUES (?, NULL, 'in_cart')`).run(itemId);
+      syncOrderTotals(order.id);
+    }
+    db.prepare(`INSERT OR REPLACE INTO shein_import_receipts
+      (receipt_token, sync_key, source_signature, item_id) VALUES (?, ?, ?, ?)`)
+      .run(body.receipt_token, body.sync_key, body.source_signature, itemId);
+    return itemId;
   });
 
   const itemId = trx();

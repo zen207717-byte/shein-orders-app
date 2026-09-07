@@ -35,7 +35,8 @@ let state = {
   selectedShipmentOrders: new Set(),
   manualCosts: {},
   currentOrderItems: [],
-  pendingSheinImport: null
+  pendingSheinImport: null,
+  existingSheinItem: null
 };
 
 const SHEIN_IMPORT_STORAGE_KEY = 'pendingSheinImport';
@@ -563,7 +564,7 @@ async function openPendingSheinImport() {
   try {
     const payload = JSON.parse(stored);
     state.pendingSheinImport = payload;
-    openSheinImportPreview(payload);
+    await openSheinImportPreview(payload);
   } catch (_) {
     sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
     toast('تعذر قراءة بيانات القطعة من الإضافة', 'error');
@@ -572,11 +573,38 @@ async function openPendingSheinImport() {
 
 captureSheinImportDraft();
 
-function openSheinImportPreview(item) {
+async function fetchExistingSheinItem(syncKey) {
+  if (!syncKey) return null;
+  const response = await fetch('/api/import/shein-item/' + encodeURIComponent(syncKey), {
+    credentials: 'include'
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error('تعذر التحقق من حالة القطعة المحفوظة');
+  return response.json();
+}
+
+function importChanges(existing, incoming) {
+  if (!existing) return [];
+  const fields = [
+    ['اللون', 'color'], ['المقاس', 'size'], ['الكمية', 'quantity'],
+    ['السعر', 'customer_unit_price', 'price']
+  ];
+  return fields.flatMap(([label, oldKey, newKey = oldKey]) => {
+    const before = String(existing[oldKey] ?? '').trim();
+    const after = String(incoming[newKey] ?? '').trim();
+    return before !== after ? [`${label}: ${before || 'فارغ'} ← ${after || 'فارغ'}`] : [];
+  });
+}
+
+async function openSheinImportPreview(item) {
+  const existing = await fetchExistingSheinItem(item.sync_key);
+  state.existingSheinItem = existing;
   const select = document.getElementById('import-order-id');
   select.innerHTML = '<option value="">اختر الزبونة والطلب</option>' + state.orders.map(order =>
     `<option value="${order.id}">${escapeHtml(order.customer_name)} — ${escapeHtml(order.order_number || ('طلب #' + order.id))}</option>`
   ).join('');
+  select.disabled = Boolean(existing);
+  if (existing) select.value = String(existing.order_id);
   document.getElementById('import-product-name').value = item.product_name || '';
   document.getElementById('import-product-url').value = item.product_url || '';
   document.getElementById('import-image-url').value = item.image_url || '';
@@ -586,6 +614,15 @@ function openSheinImportPreview(item) {
   document.getElementById('import-sku').value = item.sku || '';
   document.getElementById('import-customer-price').value = Number.isFinite(Number(item.price)) ? Number(item.price) : '';
   document.getElementById('import-shein-price').value = Number.isFinite(Number(item.price)) ? Number(item.price) : '';
+  const changes = importChanges(existing, item);
+  const alert = document.getElementById('import-alert');
+  if (existing && changes.length) {
+    alert.innerHTML = '<strong>تحديث القطعة المحفوظة نفسها بعد مراجعتك:</strong><br>' + changes.map(escapeHtml).join('<br>');
+  } else if (existing) {
+    alert.textContent = 'هذه القطعة محفوظة ومتزامنة بالفعل. لن يتم إنشاء نسخة مكررة.';
+  } else {
+    alert.textContent = 'راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.';
+  }
   updateImportImagePreview();
   document.getElementById('shein-import-modal').style.display = 'flex';
 }
@@ -610,12 +647,16 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
     quantity: Number(document.getElementById('import-quantity').value),
     sku: document.getElementById('import-sku').value.trim(),
     customer_unit_price: Number(document.getElementById('import-customer-price').value),
-    shein_unit_price: Number(document.getElementById('import-shein-price').value)
+    shein_unit_price: Number(document.getElementById('import-shein-price').value),
+    sync_key: state.pendingSheinImport?.sync_key,
+    source_signature: state.pendingSheinImport?.source_signature,
+    receipt_token: state.pendingSheinImport?.receipt_token
   };
   try {
-    await api('/import/shein-item', { method: 'POST', body });
+    const saved = await api('/import/shein-item', { method: 'POST', body });
     state.pendingSheinImport = null;
     sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
+    state.existingSheinItem = saved;
     closeModal('shein-import-modal');
     await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
     toast('تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');

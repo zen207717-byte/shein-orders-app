@@ -99,15 +99,38 @@ const orderItemColumns = db.prepare('PRAGMA table_info(order_items)').all().map(
 if (!orderItemColumns.includes('sku')) {
   db.exec('ALTER TABLE order_items ADD COLUMN sku TEXT');
 }
+if (!orderItemColumns.includes('sync_key')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN sync_key TEXT');
+}
+if (!orderItemColumns.includes('source_signature')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN source_signature TEXT');
+}
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_sync_key
+    ON order_items(sync_key) WHERE sync_key IS NOT NULL AND sync_key <> '';
+  CREATE TABLE IF NOT EXISTS shein_import_receipts (
+    receipt_token TEXT PRIMARY KEY,
+    sync_key TEXT NOT NULL,
+    source_signature TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES order_items(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_shein_receipts_created ON shein_import_receipts(created_at);
+`);
 
 db.pragma('optimize');
 
-// Seed default user (username: admin, password: admin123) if not exists
+// Seed the first admin only from a deployment secret; existing databases are untouched.
 const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
 if (userCount === 0) {
-  const hash = bcrypt.hashSync('admin123', 10);
+  const initialPassword = process.env.INITIAL_ADMIN_PASSWORD;
+  if (!initialPassword || initialPassword.length < 8) {
+    throw new Error('INITIAL_ADMIN_PASSWORD must be set to at least 8 characters for first setup');
+  }
+  const hash = bcrypt.hashSync(initialPassword, 10);
   db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', hash);
-  console.log('✓ Default user created: admin / admin123');
+  console.log('✓ Initial admin user created');
 }
 
 // Seed default exchange rate
