@@ -6,6 +6,14 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Accounting modules: payments, invoices and reports */
+.payment-row{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border,#e5e7eb)}
+.item-cancel-reason{margin-top:6px;padding:7px 9px;border-radius:8px;background:#fff1f2;color:#9f1239;font-size:13px}
+.report-filters .form-grid{align-items:end}.report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.report-grid .card{padding:18px}.report-wide{grid-column:1/-1}.table-wrap{overflow-x:auto}
+.data-table{width:100%;border-collapse:collapse}.data-table th,.data-table td{padding:10px;border:1px solid #e5e7eb;text-align:right}.data-table th{background:#f8fafc}.invoice-sheet{background:#fff;color:#111}.invoice-title{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #111;margin-bottom:16px}.invoice-totals{margin:18px 0;margin-inline-start:auto;max-width:320px}.excluded-table{opacity:.7}
+@media(max-width:700px){.report-grid{grid-template-columns:1fr}.report-wide{grid-column:auto}.invoice-sheet{padding:12px}.data-table th,.data-table td{padding:6px;font-size:12px}}
+@media print{body *{visibility:hidden!important}#invoice-modal,#invoice-modal *{visibility:visible!important}#invoice-modal{position:absolute!important;inset:0!important;display:block!important;background:#fff!important}#invoice-modal .modal-content{box-shadow:none!important;max-width:none!important;width:100%!important}.no-print{display:none!important}.invoice-sheet{overflow:visible!important}}
+
 html, body {
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Cairo', 'Tahoma', sans-serif;

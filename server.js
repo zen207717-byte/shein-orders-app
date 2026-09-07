@@ -91,12 +91,37 @@ function validateItemInput(body) {
   const status = body.status || 'in_cart';
   if (!productName) return 'اسم أو وصف المنتج مطلوب';
   if (!Number.isInteger(quantity) || quantity < 1) return 'الكمية يجب أن تكون رقمًا صحيحًا أكبر من صفر';
-  if (!Number.isFinite(customerPrice) || customerPrice < 0) return 'السعر الظاهر للزبونة غير صحيح';
-  if (!Number.isFinite(sheinPrice) || sheinPrice < 0) return 'السعر الفعلي لـ SHEIN غير صحيح';
+  if (!Number.isFinite(customerPrice) || customerPrice < 0 || customerPrice > 10000000) return 'السعر الظاهر للزبونة غير صحيح';
+  if (!Number.isFinite(sheinPrice) || sheinPrice < 0 || sheinPrice > 10000000) return 'السعر الفعلي لـ SHEIN غير صحيح';
   if (!ITEM_STATUSES.has(status)) return 'حالة القطعة غير صحيحة';
   if (!isHttpUrl(body.product_url)) return 'رابط المنتج غير صحيح';
   if (!isHttpUrl(body.image_url)) return 'رابط الصورة غير صحيح';
   return null;
+}
+
+function syncOrderPayments(orderId) {
+  const order = db.prepare('SELECT currency FROM orders WHERE id = ?').get(orderId);
+  if (!order) return 0;
+  const rate = Number(getSetting('exchange_rate')) || 425;
+  const payments = db.prepare('SELECT amount, currency FROM payments WHERE order_id = ?').all(orderId);
+  const total = payments.reduce((sum, payment) => {
+    const amount = Number(payment.amount) || 0;
+    if (payment.currency === order.currency) return sum + amount;
+    if (payment.currency === 'SAR' && order.currency === 'YER') return sum + amount * rate;
+    if (payment.currency === 'YER' && order.currency === 'SAR') return sum + amount / rate;
+    return sum;
+  }, 0);
+  db.prepare('UPDATE orders SET customer_paid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(total, orderId);
+  return total;
+}
+
+function getOrCreateCustomer(name, phone = '') {
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return null;
+  db.prepare(`INSERT OR IGNORE INTO customers (name, phone) VALUES (?, ?)`).run(cleanName, String(phone || '').trim());
+  if (phone) db.prepare(`UPDATE customers SET phone = CASE WHEN TRIM(phone) = '' THEN ? ELSE phone END,
+    updated_at = CURRENT_TIMESTAMP WHERE name = ? COLLATE NOCASE`).run(String(phone).trim(), cleanName);
+  return db.prepare('SELECT * FROM customers WHERE name = ? COLLATE NOCASE').get(cleanName);
 }
 
 function validSyncValue(value, maxLength = 300, minLength = 3) {
@@ -171,6 +196,7 @@ app.get('/api/orders', requireAuth, (req, res) => {
     SELECT orders.*,
       (SELECT COUNT(*) FROM order_items WHERE order_id = orders.id) AS item_count
     FROM orders
+    WHERE archived_at IS NULL
     ORDER BY order_date DESC, id DESC
   `).all();
   res.json(rows);
@@ -180,7 +206,8 @@ app.get('/api/orders/:id', requireAuth, (req, res) => {
   const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'الطلب غير موجود' });
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC').all(row.id).map(hydrateItem);
-  res.json({ ...row, items });
+  const payments = db.prepare('SELECT * FROM payments WHERE order_id = ? ORDER BY payment_date DESC, id DESC').all(row.id);
+  res.json({ ...row, items, payments });
 });
 
 // ========== ORDER ITEMS ROUTES ==========
@@ -201,13 +228,14 @@ app.post('/api/orders/:orderId/items', requireAuth, (req, res) => {
     const info = db.prepare(`
       INSERT INTO order_items
       (order_id, product_url, product_name, image_url, sku, color, size, quantity,
-       customer_unit_price, shein_unit_price, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       customer_unit_price, shein_unit_price, status, cancellation_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order.id, String(body.product_url || '').trim(), String(body.product_name).trim(),
       String(body.image_url || '').trim(), String(body.sku || '').trim(), String(body.color || '').trim(),
       String(body.size || '').trim(), Number(body.quantity), Number(body.customer_unit_price),
-      Number(body.shein_unit_price), body.status || 'in_cart'
+      Number(body.shein_unit_price), body.status || 'in_cart',
+      body.status === 'cancelled_by_customer' ? String(body.cancellation_reason || '').trim() : ''
     );
     db.prepare(`
       INSERT INTO order_item_status_history (item_id, old_status, new_status)
@@ -229,12 +257,13 @@ app.put('/api/order-items/:id', requireAuth, (req, res) => {
   const trx = db.transaction(() => {
     db.prepare(`
       UPDATE order_items SET product_url = ?, product_name = ?, image_url = ?, sku = ?, color = ?, size = ?,
-        quantity = ?, customer_unit_price = ?, shein_unit_price = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        quantity = ?, customer_unit_price = ?, shein_unit_price = ?, status = ?, cancellation_reason = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       String(body.product_url || '').trim(), String(body.product_name).trim(),
       String(body.image_url || '').trim(), String(body.sku || '').trim(), String(body.color || '').trim(), String(body.size || '').trim(),
-      Number(body.quantity), Number(body.customer_unit_price), Number(body.shein_unit_price), body.status, existing.id
+      Number(body.quantity), Number(body.customer_unit_price), Number(body.shein_unit_price), body.status,
+      body.status === 'cancelled_by_customer' ? String(body.cancellation_reason || '').trim() : '', existing.id
     );
     if (body.status !== existing.status) {
       db.prepare(`
@@ -352,24 +381,25 @@ app.post('/api/orders', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'اسم الزبونة مطلوب' });
   }
 
-  const stmt = db.prepare(`
-    INSERT INTO orders
-    (customer_name, customer_phone, order_number, order_date, customer_value, shein_paid, customer_paid, currency, status, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const info = stmt.run(
-    customer_name.trim(),
-    customer_phone || '',
-    order_number || '',
-    order_date || new Date().toISOString().split('T')[0],
-    parseFloat(customer_value) || 0,
-    parseFloat(shein_paid) || 0,
-    parseFloat(customer_paid) || 0,
-    currency || 'SAR',
-    status || 'new',
-    notes || ''
-  );
-  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(info.lastInsertRowid);
+  const orderId = db.transaction(() => {
+    const customer = getOrCreateCustomer(customer_name, customer_phone);
+    const info = db.prepare(`
+      INSERT INTO orders
+      (customer_id, customer_name, customer_phone, order_number, order_date, customer_value, shein_paid, customer_paid, currency, status, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(
+      customer.id, customer.name, customer_phone || customer.phone || '', order_number || '',
+      order_date || new Date().toISOString().split('T')[0], parseFloat(customer_value) || 0,
+      parseFloat(shein_paid) || 0, currency || 'SAR', status || 'new', notes || ''
+    );
+    const initialPaid = Number(customer_paid) || 0;
+    if (initialPaid > 0) db.prepare(`INSERT INTO payments
+      (order_id, amount, currency, payment_date, notes) VALUES (?, ?, ?, ?, ?)`)
+      .run(info.lastInsertRowid, initialPaid, currency || 'SAR', order_date || new Date().toISOString().split('T')[0], 'دفعة أولى');
+    syncOrderPayments(info.lastInsertRowid);
+    return info.lastInsertRowid;
+  })();
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
   res.json(order);
 });
 
@@ -385,16 +415,18 @@ app.put('/api/orders/:id', requireAuth, (req, res) => {
   const hasItems = db.prepare('SELECT EXISTS(SELECT 1 FROM order_items WHERE order_id = ?) AS found').get(id).found === 1;
   const effectiveCustomerValue = hasItems ? existing.customer_value : customer_value;
   const effectiveSheinPaid = hasItems ? existing.shein_paid : shein_paid;
+  const customer = customer_name ? getOrCreateCustomer(customer_name, customer_phone) : null;
 
   db.prepare(`
     UPDATE orders SET
       customer_name = COALESCE(?, customer_name),
+      customer_id = COALESCE(?, customer_id),
       customer_phone = COALESCE(?, customer_phone),
       order_number = COALESCE(?, order_number),
       order_date = COALESCE(?, order_date),
       customer_value = COALESCE(?, customer_value),
       shein_paid = COALESCE(?, shein_paid),
-      customer_paid = COALESCE(?, customer_paid),
+      customer_paid = customer_paid,
       currency = COALESCE(?, currency),
       status = COALESCE(?, status),
       shipping_cost = COALESCE(?, shipping_cost),
@@ -403,8 +435,8 @@ app.put('/api/orders/:id', requireAuth, (req, res) => {
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
-    customer_name, customer_phone, order_number, order_date,
-    effectiveCustomerValue, effectiveSheinPaid, customer_paid, currency, status,
+    customer_name, customer?.id || null, customer_phone, order_number, order_date,
+    effectiveCustomerValue, effectiveSheinPaid, currency, status,
     shipping_cost, shipment_id, notes,
     id
   );
@@ -413,9 +445,33 @@ app.put('/api/orders/:id', requireAuth, (req, res) => {
 });
 
 app.delete('/api/orders/:id', requireAuth, (req, res) => {
-  const info = db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
+  const info = db.prepare('UPDATE orders SET archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'الطلب غير موجود' });
   res.json({ ok: true });
+});
+
+// ========== PAYMENTS ROUTES ==========
+app.get('/api/orders/:orderId/payments', requireAuth, (req, res) => {
+  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  res.json(db.prepare('SELECT * FROM payments WHERE order_id = ? ORDER BY payment_date DESC, id DESC').all(order.id));
+});
+
+app.post('/api/orders/:orderId/payments', requireAuth, (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000000) return res.status(400).json({ error: 'مبلغ الدفعة غير صحيح' });
+  const currency = req.body?.currency || order.currency;
+  if (!['SAR', 'YER'].includes(currency)) return res.status(400).json({ error: 'عملة الدفعة غير صحيحة' });
+  const paymentId = db.transaction(() => {
+    const info = db.prepare(`INSERT INTO payments (order_id, amount, currency, payment_date, notes)
+      VALUES (?, ?, ?, ?, ?)`).run(order.id, amount, currency,
+      req.body?.payment_date || new Date().toISOString().slice(0, 10), String(req.body?.notes || '').trim());
+    syncOrderPayments(order.id);
+    return info.lastInsertRowid;
+  })();
+  res.status(201).json(db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId));
 });
 
 // ========== SHIPMENTS ROUTES ==========
@@ -437,7 +493,7 @@ app.get('/api/shipments/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/shipments', requireAuth, (req, res) => {
-  const { name, total_cost, currency, distribution, notes, order_ids, manual_costs } = req.body || {};
+  const { name, total_cost, currency, distribution, status, notes, order_ids, manual_costs } = req.body || {};
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'اسم الشحنة مطلوب' });
   }
@@ -448,13 +504,14 @@ app.post('/api/shipments', requireAuth, (req, res) => {
 
   const trx = db.transaction(() => {
     const info = db.prepare(`
-      INSERT INTO shipments (name, total_cost, currency, distribution, notes)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO shipments (name, total_cost, currency, distribution, status, notes)
+      VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       name.trim(),
       parseFloat(total_cost) || 0,
       currency || 'SAR',
       distribution || 'equal',
+      status || 'in_transit',
       notes || ''
     );
     const shipmentId = info.lastInsertRowid;
@@ -487,6 +544,21 @@ app.post('/api/shipments', requireAuth, (req, res) => {
   res.json(db.prepare('SELECT * FROM shipments WHERE id = ?').get(shipmentId));
 });
 
+app.put('/api/shipments/:id', requireAuth, (req, res) => {
+  const existing = db.prepare('SELECT * FROM shipments WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'الشحنة غير موجودة' });
+  const allowed = new Set(['ordered_from_shein', 'arrived_saudi', 'shipped_to_yemen', 'arrived_yemen', 'completed']);
+  const status = req.body?.status || existing.status;
+  if (!allowed.has(status) && status !== 'in_transit') return res.status(400).json({ error: 'حالة الشحنة غير صحيحة' });
+  db.prepare(`UPDATE shipments SET status = ?, saudi_arrival_date = ?, yemen_shipping_date = ?,
+    yemen_arrival_date = ?, notes = ? WHERE id = ?`).run(status,
+    req.body?.saudi_arrival_date ?? existing.saudi_arrival_date,
+    req.body?.yemen_shipping_date ?? existing.yemen_shipping_date,
+    req.body?.yemen_arrival_date ?? existing.yemen_arrival_date,
+    String(req.body?.notes ?? existing.notes ?? ''), existing.id);
+  res.json(db.prepare('SELECT * FROM shipments WHERE id = ?').get(existing.id));
+});
+
 app.delete('/api/shipments/:id', requireAuth, (req, res) => {
   const id = req.params.id;
   const trx = db.transaction(() => {
@@ -500,26 +572,52 @@ app.delete('/api/shipments/:id', requireAuth, (req, res) => {
 // ========== CUSTOMERS ROUTES ==========
 app.get('/api/customers', requireAuth, (req, res) => {
   const rows = db.prepare(`
-    SELECT
-      customer_name AS name,
-      MAX(customer_phone) AS phone,
-      COUNT(*) AS order_count,
-      SUM(customer_value) AS total_value,
-      SUM(customer_paid) AS total_paid,
-      SUM(customer_value - customer_paid) AS total_remaining
-    FROM orders
-    GROUP BY customer_name
-    ORDER BY customer_name ASC
+    SELECT c.*,
+      COUNT(o.id) AS order_count,
+      COALESCE(SUM(o.customer_value), 0) AS total_value,
+      COALESCE(SUM(o.customer_paid), 0) AS total_paid,
+      COALESCE(SUM(o.customer_value - o.customer_paid), 0) AS total_remaining
+    FROM customers c LEFT JOIN orders o ON o.customer_id = c.id AND o.archived_at IS NULL
+    GROUP BY c.id ORDER BY c.name COLLATE NOCASE
   `).all();
   res.json(rows);
 });
 
-app.get('/api/customers/:name', requireAuth, (req, res) => {
-  const name = decodeURIComponent(req.params.name);
+app.post('/api/customers', requireAuth, (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'اسم الزبونة مطلوب' });
+  const duplicate = db.prepare('SELECT id FROM customers WHERE name = ? COLLATE NOCASE').get(name);
+  if (duplicate) return res.status(409).json({ error: 'هذه الزبونة موجودة بالفعل', customer_id: duplicate.id });
+  const info = db.prepare('INSERT INTO customers (name, phone, address, notes) VALUES (?, ?, ?, ?)')
+    .run(name, String(req.body?.phone || '').trim(), String(req.body?.address || '').trim(), String(req.body?.notes || '').trim());
+  res.status(201).json(db.prepare('SELECT * FROM customers WHERE id = ?').get(info.lastInsertRowid));
+});
+
+app.put('/api/customers/:id', requireAuth, (req, res) => {
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+  if (!customer) return res.status(404).json({ error: 'الزبونة غير موجودة' });
+  const name = String(req.body?.name ?? customer.name).trim();
+  if (!name) return res.status(400).json({ error: 'اسم الزبونة مطلوب' });
+  try {
+    db.transaction(() => {
+      db.prepare(`UPDATE customers SET name = ?, phone = ?, address = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(name, String(req.body?.phone ?? customer.phone ?? '').trim(), String(req.body?.address ?? customer.address ?? '').trim(), String(req.body?.notes ?? customer.notes ?? '').trim(), customer.id);
+      db.prepare('UPDATE orders SET customer_name = ?, customer_phone = COALESCE(NULLIF(?, \'\'), customer_phone) WHERE customer_id = ?')
+        .run(name, String(req.body?.phone ?? customer.phone ?? '').trim(), customer.id);
+    })();
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'اسم الزبونة مستخدم بالفعل' });
+    throw error;
+  }
+  res.json(db.prepare('SELECT * FROM customers WHERE id = ?').get(customer.id));
+});
+
+app.get('/api/customers/:id', requireAuth, (req, res) => {
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+  if (!customer) return res.status(404).json({ error: 'الزبونة غير موجودة' });
   const orders = db.prepare(`
-    SELECT * FROM orders WHERE customer_name = ? ORDER BY order_date DESC, id DESC
-  `).all(name);
-  if (orders.length === 0) return res.status(404).json({ error: 'الزبونة غير موجودة' });
+    SELECT * FROM orders WHERE customer_id = ? AND archived_at IS NULL ORDER BY order_date DESC, id DESC
+  `).all(customer.id);
 
   const summary = db.prepare(`
     SELECT
@@ -530,15 +628,15 @@ app.get('/api/customers/:name', requireAuth, (req, res) => {
       SUM(customer_paid) AS total_paid,
       SUM(shipping_cost) AS total_shipping,
       SUM(customer_value - customer_paid) AS total_remaining
-    FROM orders WHERE customer_name = ?
-  `).get(name);
+    FROM orders WHERE customer_id = ? AND archived_at IS NULL
+  `).get(customer.id);
 
-  res.json({ name, phone: orders[0].customer_phone, summary, orders });
+  res.json({ ...customer, summary, orders });
 });
 
 // ========== DASHBOARD ROUTES ==========
 app.get('/api/dashboard', requireAuth, (req, res) => {
-  const all = db.prepare('SELECT * FROM orders').all();
+  const all = db.prepare('SELECT * FROM orders WHERE archived_at IS NULL').all();
   const orderCount = all.length;
   const totalValue = all.reduce((s, o) => s + (o.customer_value || 0), 0);
   const totalSheinPaid = all.reduce((s, o) => s + (o.shein_paid || 0), 0);
@@ -551,11 +649,16 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   const statusBreakdown = {};
   const statusLabels = {
     new: 'جديد',
+    in_cart: 'في السلة',
     ordered: 'تم الطلب من SHEIN',
+    shipped: 'تم الشحن',
+    arrived: 'وصل',
     saudi: 'وصل السعودية',
     shipped_to_yemen: 'تم شحنه إلى اليمن',
     yemen: 'وصل اليمن',
-    delivered: 'تم التسليم للزبونة'
+    delivered: 'تم التسليم',
+    cancelled_by_customer: 'ملغاة من الزبونة',
+    out_of_stock: 'نفدت من SHEIN'
   };
   for (const s of Object.keys(statusLabels)) {
     statusBreakdown[s] = all.filter(o => o.status === s).length;
@@ -563,7 +666,7 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
 
   // Customers count
   const customerCount = db.prepare(`
-    SELECT COUNT(DISTINCT customer_name) AS c FROM orders
+    SELECT COUNT(*) AS c FROM customers
   `).get().c;
 
   // Monthly report (last 12 months)
@@ -576,7 +679,7 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
       SUM(customer_value - shein_paid) AS total_commission,
       SUM(customer_paid) AS total_received
     FROM orders
-    WHERE order_date IS NOT NULL
+    WHERE order_date IS NOT NULL AND archived_at IS NULL
     GROUP BY strftime('%Y-%m', order_date)
     ORDER BY month DESC
     LIMIT 12
@@ -595,6 +698,53 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
     status_labels: statusLabels,
     monthly: monthly
   });
+});
+
+// ========== INVOICES & REPORTS ==========
+app.get('/api/invoices/:orderId', requireAuth, (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND archived_at IS NULL').get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(order.id).map(hydrateItem);
+  const payments = db.prepare('SELECT * FROM payments WHERE order_id = ? ORDER BY payment_date, id').all(order.id);
+  res.json({ order, items, payments, totals: {
+    total: order.customer_value,
+    paid: order.customer_paid,
+    remaining: order.customer_value - order.customer_paid,
+    shipping: order.shipping_cost,
+    commission: order.customer_value - order.shein_paid
+  }});
+});
+
+app.get('/api/reports', requireAuth, (req, res) => {
+  const where = ['o.archived_at IS NULL'];
+  const params = [];
+  if (req.query.date_from) { where.push('o.order_date >= ?'); params.push(req.query.date_from); }
+  if (req.query.date_to) { where.push('o.order_date <= ?'); params.push(req.query.date_to); }
+  if (req.query.customer_id) { where.push('o.customer_id = ?'); params.push(Number(req.query.customer_id)); }
+  if (req.query.status) { where.push('o.status = ?'); params.push(req.query.status); }
+  const clause = where.join(' AND ');
+  const orders = db.prepare(`SELECT o.* FROM orders o WHERE ${clause}`).all(...params);
+  const ids = orders.map(order => order.id);
+  const itemRows = ids.length ? db.prepare(`SELECT oi.* FROM order_items oi WHERE oi.order_id IN (${ids.map(() => '?').join(',')})`).all(...ids) : [];
+  const statusRows = db.prepare(`SELECT o.status, COUNT(*) AS count FROM orders o WHERE ${clause} GROUP BY o.status`).all(...params);
+  const monthly = db.prepare(`SELECT strftime('%Y-%m', o.order_date) AS month, COUNT(*) AS order_count,
+    SUM(o.customer_value) AS sales, SUM(o.customer_paid) AS paid,
+    SUM(o.customer_value - o.customer_paid) AS remaining,
+    SUM(o.customer_value - o.shein_paid) AS commission, SUM(o.shipping_cost) AS shipping
+    FROM orders o WHERE ${clause} GROUP BY month ORDER BY month DESC`).all(...params);
+  const totals = orders.reduce((sum, order) => ({
+    sales: sum.sales + Number(order.customer_value || 0),
+    paid: sum.paid + Number(order.customer_paid || 0),
+    remaining: sum.remaining + Number(order.customer_value - order.customer_paid || 0),
+    commission: sum.commission + Number(order.customer_value - order.shein_paid || 0),
+    shipping: sum.shipping + Number(order.shipping_cost || 0)
+  }), { sales: 0, paid: 0, remaining: 0, commission: 0, shipping: 0 });
+  const dueCustomers = db.prepare(`SELECT c.id, c.name, SUM(o.customer_value - o.customer_paid) AS remaining
+    FROM customers c JOIN orders o ON o.customer_id = c.id WHERE ${clause}
+    GROUP BY c.id HAVING remaining > 0 ORDER BY remaining DESC`).all(...params);
+  res.json({ totals, status_breakdown: statusRows, monthly, due_customers: dueCustomers,
+    cancelled_items: itemRows.filter(item => item.status === 'cancelled_by_customer').map(hydrateItem),
+    out_of_stock_items: itemRows.filter(item => item.status === 'out_of_stock').map(hydrateItem) });
 });
 
 // ========== EXPORT ROUTES ==========

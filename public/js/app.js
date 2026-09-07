@@ -2,11 +2,22 @@
 
 const STATUS_LABELS = {
   new: 'جديد',
+  in_cart: 'في السلة',
   ordered: 'تم الطلب من SHEIN',
+  shipped: 'تم الشحن',
+  arrived: 'وصل',
   saudi: 'وصل السعودية',
   shipped_to_yemen: 'تم شحنه إلى اليمن',
   yemen: 'وصل اليمن',
-  delivered: 'تم التسليم للزبونة'
+  delivered: 'تم التسليم',
+  cancelled_by_customer: 'ملغاة من الزبونة',
+  out_of_stock: 'نفدت من SHEIN'
+};
+
+const SHIPMENT_STATUS_LABELS = {
+  ordered_from_shein: 'تم الطلب من SHEIN', arrived_saudi: 'وصلت السعودية',
+  shipped_to_yemen: 'شُحنت إلى اليمن', arrived_yemen: 'وصلت اليمن',
+  completed: 'مكتملة', in_transit: 'قيد الشحن'
 };
 
 const ITEM_STATUS_LABELS = {
@@ -35,6 +46,8 @@ let state = {
   selectedShipmentOrders: new Set(),
   manualCosts: {},
   currentOrderItems: [],
+  currentOrderPayments: [],
+  customerFormContext: null,
   pendingSheinImport: null,
   existingSheinItem: null
 };
@@ -191,6 +204,8 @@ function switchView(view) {
     orders: 'الطلبات',
     customers: 'الزبائن',
     shipments: 'الشحنات',
+    invoices: 'الفواتير',
+    reports: 'التقارير',
     settings: 'الإعدادات'
   };
   document.getElementById('topbar-title').textContent = titles[view] || '';
@@ -199,6 +214,8 @@ function switchView(view) {
   if (view === 'orders') loadOrders();
   if (view === 'customers') loadCustomers();
   if (view === 'shipments') loadShipments();
+  if (view === 'invoices') renderInvoices();
+  if (view === 'reports') loadReports();
   if (view === 'settings') loadSettings();
 }
 
@@ -329,7 +346,8 @@ function renderOrders() {
       <div class="order-card-row"><span>المتبقي:</span><strong class="text-danger">${fmt(remaining, o.currency)}</strong></div>
       <div class="order-card-actions">
         <button class="btn btn-outline btn-sm" onclick="openOrderModal('${o.id}')">✏️ تعديل</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteOrder(${o.id})">🗑️ حذف</button>
+        <button class="btn btn-outline btn-sm" onclick="openInvoice(${o.id})">🧾 فاتورة</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteOrder(${o.id})">أرشفة</button>
       </div>
     `;
     list.appendChild(card);
@@ -353,6 +371,7 @@ function openOrderModal(orderId) {
   document.getElementById('order-date').value = new Date().toISOString().split('T')[0];
   state.currentOrderItems = [];
   document.getElementById('order-items-section').style.display = 'none';
+  document.getElementById('order-payments-section').style.display = 'none';
   document.getElementById('new-order-items-note').style.display = 'none';
   setOrderTotalsReadonly(false);
 
@@ -382,6 +401,7 @@ function openOrderModal(orderId) {
       document.getElementById('order-status').value = o.status || 'new';
       document.getElementById('order-notes').value = o.notes || '';
       loadOrderItems(o.id);
+      loadOrderPayments(o.id);
     }
   } else {
     document.getElementById('order-modal-title').textContent = 'إضافة طلب جديد';
@@ -437,6 +457,8 @@ function renderOrderItems() {
         <div class="item-card-content">
           <div class="item-card-top"><strong>${escapeHtml(item.product_name)}</strong><span class="item-status status-item-${item.status}">${ITEM_STATUS_LABELS[item.status]}</span></div>
           <div class="item-meta">${escapeHtml(item.color || 'بدون لون')} • ${escapeHtml(item.size || 'بدون مقاس')} • الكمية: ${item.quantity}</div>
+          ${item.sku ? `<div class="item-meta">SKU: ${escapeHtml(item.sku)}</div>` : ''}
+          ${item.status === 'cancelled_by_customer' && item.cancellation_reason ? `<div class="item-cancel-reason">سبب الإلغاء: ${escapeHtml(item.cancellation_reason)}</div>` : ''}
           <div class="item-prices"><span>للزبونة: <b>${fmt(item.customer_total, document.getElementById('order-currency').value)}</b></span><span>SHEIN: <b>${fmt(item.shein_total, document.getElementById('order-currency').value)}</b></span><span class="text-success">الربح: <b>${fmt(item.commission, document.getElementById('order-currency').value)}</b></span></div>
           <div class="item-card-actions">
             ${item.product_url ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(item.product_url)}" target="_blank" rel="noopener noreferrer">فتح الرابط</a>` : ''}
@@ -473,6 +495,7 @@ function openItemModal(itemId) {
     document.getElementById('item-customer-price').value = item.customer_unit_price;
     document.getElementById('item-shein-price').value = item.shein_unit_price;
     document.getElementById('item-status').value = item.status;
+    document.getElementById('item-cancellation-reason').value = item.cancellation_reason || '';
   } else {
     document.getElementById('item-modal-title').textContent = 'إضافة قطعة';
     document.getElementById('item-status').value = 'in_cart';
@@ -499,6 +522,8 @@ function updateItemCalc() {
   document.getElementById('item-shein-total').textContent = sheinTotal.toFixed(2);
   document.getElementById('item-commission').textContent = (customerTotal - sheinTotal).toFixed(2);
   document.getElementById('item-excluded-warning').style.display = excluded ? 'block' : 'none';
+  document.getElementById('item-cancellation-group').style.display =
+    document.getElementById('item-status').value === 'cancelled_by_customer' ? 'block' : 'none';
 }
 
 function updateItemImagePreview() {
@@ -522,7 +547,8 @@ document.getElementById('item-form').addEventListener('submit', async (e) => {
     quantity: parseInt(document.getElementById('item-quantity').value, 10),
     customer_unit_price: parseFloat(document.getElementById('item-customer-price').value),
     shein_unit_price: parseFloat(document.getElementById('item-shein-price').value),
-    status: document.getElementById('item-status').value
+    status: document.getElementById('item-status').value,
+    cancellation_reason: document.getElementById('item-cancellation-reason').value.trim()
   };
   try {
     if (itemId) await api('/order-items/' + itemId, { method: 'PUT', body: data });
@@ -534,6 +560,45 @@ document.getElementById('item-form').addEventListener('submit', async (e) => {
   } catch (err) {
     toast(err.message, 'error');
   }
+});
+
+async function loadOrderPayments(orderId) {
+  try {
+    state.currentOrderPayments = await api('/orders/' + orderId + '/payments');
+    const section = document.getElementById('order-payments-section');
+    section.style.display = 'block';
+    const list = document.getElementById('order-payments-list');
+    list.innerHTML = state.currentOrderPayments.length ? state.currentOrderPayments.map(p => `
+      <div class="payment-row"><span>${fmtDate(p.payment_date)}${p.notes ? ' — ' + escapeHtml(p.notes) : ''}</span><strong>${fmt(p.amount, p.currency)}</strong></div>`).join('')
+      : '<div class="empty-items">لا توجد دفعات مسجلة.</div>';
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+document.getElementById('add-payment-btn').addEventListener('click', () => {
+  if (!document.getElementById('order-id').value) return toast('احفظ الطلب أولًا', 'warning');
+  document.getElementById('payment-form').reset();
+  document.getElementById('payment-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('payment-currency').value = document.getElementById('order-currency').value;
+  document.getElementById('payment-modal').style.display = 'flex';
+});
+
+document.getElementById('payment-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const orderId = document.getElementById('order-id').value;
+  try {
+    await api('/orders/' + orderId + '/payments', { method: 'POST', body: {
+      amount: Number(document.getElementById('payment-amount').value),
+      currency: document.getElementById('payment-currency').value,
+      payment_date: document.getElementById('payment-date').value,
+      notes: document.getElementById('payment-notes').value.trim()
+    }});
+    closeModal('payment-modal');
+    await Promise.all([loadOrderPayments(orderId), loadOrders(), loadDashboard(), loadCustomers()]);
+    const refreshed = state.orders.find(o => String(o.id) === String(orderId));
+    if (refreshed) document.getElementById('order-customer-paid').value = refreshed.customer_paid;
+    updateAutoCalc();
+    toast('تم تسجيل الدفعة', 'success');
+  } catch (err) { toast(err.message, 'error'); }
 });
 
 function decodeImportPayload(value) {
@@ -604,6 +669,9 @@ async function openSheinImportPreview(item) {
     `<option value="${order.id}">${escapeHtml(order.customer_name)} — ${escapeHtml(order.order_number || ('طلب #' + order.id))}</option>`
   ).join('');
   select.disabled = Boolean(existing);
+  const addCustomer = document.getElementById('import-add-customer-btn');
+  addCustomer.style.display = existing ? 'none' : 'inline-flex';
+  addCustomer.textContent = state.customers.length ? 'إضافة زبونة جديدة' : 'لا توجد زبائن — إضافة زبونة جديدة';
   if (existing) select.value = String(existing.order_id);
   document.getElementById('import-product-name').value = item.product_name || '';
   document.getElementById('import-product-url').value = item.product_url || '';
@@ -634,6 +702,7 @@ function updateImportImagePreview() {
   preview.innerHTML = url ? `<img src="${escapeHtml(url)}" alt="معاينة صورة المنتج" onerror="this.parentElement.style.display='none'">` : '';
 }
 document.getElementById('import-image-url').addEventListener('input', updateImportImagePreview);
+document.getElementById('import-add-customer-btn').addEventListener('click', () => openCustomerForm('import'));
 
 document.getElementById('shein-import-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -733,10 +802,10 @@ document.getElementById('order-form').addEventListener('submit', async (e) => {
 });
 
 async function deleteOrder(id) {
-  if (!confirm('هل أنت متأكد من حذف هذا الطلب؟')) return;
+  if (!confirm('هل تريد أرشفة هذا الطلب؟ سيبقى محفوظًا في قاعدة البيانات.')) return;
   try {
     await api('/orders/' + id, { method: 'DELETE' });
-    toast('تم حذف الطلب', 'success');
+    toast('تمت أرشفة الطلب بدون حذف سجلاته', 'success');
     await loadOrders();
     await loadDashboard();
     await loadCustomers();
@@ -768,7 +837,7 @@ function renderCustomers() {
   for (const c of filtered) {
     const card = document.createElement('div');
     card.className = 'customer-card';
-    card.onclick = () => openCustomerModal(c.name);
+    card.onclick = () => openCustomerModal(c.id);
     card.innerHTML = `
       <div class="customer-card-name">${escapeHtml(c.name)}</div>
       <div class="customer-card-phone">${escapeHtml(c.phone || 'لا يوجد رقم')}</div>
@@ -792,13 +861,14 @@ function renderCustomers() {
 }
 
 document.getElementById('customers-search').addEventListener('input', renderCustomers);
+document.getElementById('add-customer-btn').addEventListener('click', () => openCustomerForm(null));
 document.getElementById('export-customers-btn').addEventListener('click', () => {
   window.location.href = '/api/export/customers';
 });
 
-async function openCustomerModal(name) {
+async function openCustomerModal(id) {
   try {
-    const data = await api('/customers/' + encodeURIComponent(name));
+    const data = await api('/customers/' + id);
     document.getElementById('customer-modal-title').textContent = 'تفاصيل: ' + data.name;
     const summary = document.getElementById('customer-summary');
     const s = data.summary;
@@ -858,6 +928,38 @@ async function openCustomerModal(name) {
   }
 }
 
+function openCustomerForm(context = null) {
+  state.customerFormContext = context;
+  document.getElementById('customer-form').reset();
+  document.getElementById('customer-id').value = '';
+  document.getElementById('customer-form-modal').style.display = 'flex';
+}
+
+document.getElementById('customer-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    const customer = await api('/customers', { method: 'POST', body: {
+      name: document.getElementById('customer-name').value.trim(),
+      phone: document.getElementById('customer-phone').value.trim(),
+      address: document.getElementById('customer-address').value.trim(),
+      notes: document.getElementById('customer-notes').value.trim()
+    }});
+    closeModal('customer-form-modal');
+    await loadCustomers();
+    if (state.customerFormContext === 'import') {
+      const order = await api('/orders', { method: 'POST', body: {
+        customer_name: customer.name, customer_phone: customer.phone || '',
+        order_date: new Date().toISOString().split('T')[0], currency: 'SAR', status: 'in_cart'
+      }});
+      await loadOrders();
+      await openSheinImportPreview(state.pendingSheinImport);
+      document.getElementById('import-order-id').value = String(order.id);
+    }
+    state.customerFormContext = null;
+    toast('تمت إضافة الزبونة', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+});
+
 // ============== SHIPMENTS ==============
 async function loadShipments() {
   try {
@@ -879,6 +981,7 @@ function renderShipments() {
     card.innerHTML = `
       <div class="shipment-card-name">${escapeHtml(s.name)}</div>
       <div class="shipment-card-meta">${s.order_count} طلب • ${fmtDate(s.created_at)}</div>
+      <div class="order-card-status">${SHIPMENT_STATUS_LABELS[s.status] || s.status || 'تم الطلب من SHEIN'}</div>
       <div class="shipment-card-stats">
         <span>التكلفة: <strong>${fmt(s.total_cost, s.currency)}</strong></span>
         <span>التوزيع: <strong>${s.distribution === 'equal' ? 'بالتساوي' : 'يدوي'}</strong></span>
@@ -902,6 +1005,7 @@ async function openShipmentModal() {
   state.manualCosts = {};
   document.getElementById('shipment-name').value = '';
   document.getElementById('shipment-total-cost').value = '0';
+  document.getElementById('shipment-status').value = 'ordered_from_shein';
   document.getElementById('manual-costs-section').style.display = 'none';
 
   // Load orders without shipment
@@ -989,6 +1093,7 @@ document.getElementById('shipment-form').addEventListener('submit', async (e) =>
     name: document.getElementById('shipment-name').value.trim(),
     total_cost: parseFloat(document.getElementById('shipment-total-cost').value) || 0,
     currency: document.getElementById('shipment-currency').value,
+    status: document.getElementById('shipment-status').value,
     distribution,
     notes: document.getElementById('shipment-notes').value.trim(),
     order_ids: Array.from(state.selectedShipmentOrders),
@@ -1035,6 +1140,63 @@ async function deleteShipment(id) {
     toast(err.message, 'error');
   }
 }
+
+// ============== INVOICES ==============
+function renderInvoices() {
+  const list = document.getElementById('invoices-list');
+  const search = (document.getElementById('invoices-search').value || '').toLowerCase();
+  const orders = state.orders.filter(o => (o.customer_name + ' ' + (o.order_number || '')).toLowerCase().includes(search));
+  list.innerHTML = orders.length ? orders.map(o => `
+    <div class="order-card"><div class="order-card-header"><strong>${escapeHtml(o.customer_name)}</strong><span>${fmtDate(o.order_date)}</span></div>
+    <div class="order-card-row"><span>${escapeHtml(o.order_number || ('طلب #' + o.id))}</span><strong>${fmt(o.customer_value, o.currency)}</strong></div>
+    <button class="btn btn-primary btn-sm" onclick="openInvoice(${o.id})">عرض وطباعة الفاتورة</button></div>`).join('')
+    : '<div class="empty-state">لا توجد فواتير مطابقة.</div>';
+}
+document.getElementById('invoices-search').addEventListener('input', renderInvoices);
+
+async function openInvoice(orderId) {
+  try {
+    const data = await api('/invoices/' + orderId);
+    const active = data.items.filter(i => !EXCLUDED_ITEM_STATUSES.has(i.status));
+    const excluded = data.items.filter(i => EXCLUDED_ITEM_STATUSES.has(i.status));
+    const rows = items => items.map(i => `<tr><td>${escapeHtml(i.product_name)}</td><td>${escapeHtml(i.color || '-')}</td><td>${escapeHtml(i.size || '-')}</td><td>${i.quantity}</td><td>${fmt(i.customer_unit_price, data.order.currency)}</td><td>${fmt(i.customer_total, data.order.currency)}</td></tr>`).join('');
+    document.getElementById('invoice-content').innerHTML = `
+      <div class="invoice-title"><h2>حسابات أم مروان</h2><div>فاتورة ${escapeHtml(data.order.order_number || ('#' + data.order.id))}</div></div>
+      <p><strong>الزبونة:</strong> ${escapeHtml(data.order.customer_name)} &nbsp; <strong>التاريخ:</strong> ${fmtDate(data.order.order_date)}</p>
+      <table class="data-table"><thead><tr><th>القطعة</th><th>اللون</th><th>المقاس</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${rows(active)}</tbody></table>
+      <div class="invoice-totals"><p>الإجمالي: <strong>${fmt(data.totals.total, data.order.currency)}</strong></p><p>المدفوع: <strong>${fmt(data.totals.paid, data.order.currency)}</strong></p><p>المتبقي: <strong>${fmt(data.totals.remaining, data.order.currency)}</strong></p><p>حالة الطلب: <strong>${STATUS_LABELS[data.order.status] || data.order.status}</strong></p></div>
+      ${excluded.length ? `<h3>سجل القطع المستبعدة</h3><table class="data-table excluded-table"><tbody>${rows(excluded)}</tbody></table>` : ''}`;
+    document.getElementById('invoice-modal').style.display = 'flex';
+  } catch (err) { toast(err.message, 'error'); }
+}
+document.getElementById('print-invoice-btn').addEventListener('click', () => window.print());
+
+// ============== REPORTS ==============
+async function loadReports() {
+  const customerSelect = document.getElementById('report-customer');
+  const selected = customerSelect.value;
+  customerSelect.innerHTML = '<option value="">كل الزبائن</option>' + state.customers.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  customerSelect.value = selected;
+  const statusSelect = document.getElementById('report-status');
+  if (statusSelect.options.length <= 1) statusSelect.innerHTML += Object.entries(STATUS_LABELS).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+  const query = new URLSearchParams();
+  [['date_from','report-date-from'], ['date_to','report-date-to'], ['customer_id','report-customer'], ['status','report-status']].forEach(([key,id]) => {
+    const value = document.getElementById(id).value; if (value) query.set(key, value);
+  });
+  try {
+    const report = await api('/reports?' + query.toString());
+    const metrics = [['إجمالي المبيعات','sales'],['إجمالي المدفوع','paid'],['المتبقي','remaining'],['العمولة/الربح','commission'],['مصاريف الشحن','shipping']];
+    document.getElementById('report-summary').innerHTML = metrics.map(([label,key]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${fmtNum(report.totals[key])}</div></div>`).join('');
+    const simpleItems = items => items.length ? items.map(i => `<li>${escapeHtml(i.product_name)}${i.cancellation_reason ? ' — ' + escapeHtml(i.cancellation_reason) : ''}</li>`).join('') : '<li>لا يوجد</li>';
+    document.getElementById('report-details').innerHTML = `
+      <div class="report-grid"><section class="card"><h3>الطلبات حسب الحالة</h3><ul>${report.status_breakdown.map(s => `<li>${STATUS_LABELS[s.status] || s.status}: ${s.count}</li>`).join('') || '<li>لا يوجد</li>'}</ul></section>
+      <section class="card"><h3>الزبائن ذوو المبالغ المتبقية</h3><ul>${report.due_customers.map(c => `<li>${escapeHtml(c.name)}: ${fmtNum(c.remaining)}</li>`).join('') || '<li>لا يوجد</li>'}</ul></section>
+      <section class="card"><h3>القطع الملغاة</h3><ul>${simpleItems(report.cancelled_items)}</ul></section>
+      <section class="card"><h3>القطع النافدة من SHEIN</h3><ul>${simpleItems(report.out_of_stock_items)}</ul></section>
+      <section class="card report-wide"><h3>التقرير الشهري</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>الشهر</th><th>الطلبات</th><th>المبيعات</th><th>المدفوع</th><th>المتبقي</th><th>العمولة</th><th>الشحن</th></tr></thead><tbody>${report.monthly.map(m => `<tr><td>${fmtMonth(m.month)}</td><td>${m.order_count}</td><td>${fmtNum(m.sales)}</td><td>${fmtNum(m.paid)}</td><td>${fmtNum(m.remaining)}</td><td>${fmtNum(m.commission)}</td><td>${fmtNum(m.shipping)}</td></tr>`).join('')}</tbody></table></div></section></div>`;
+  } catch (err) { toast(err.message, 'error'); }
+}
+document.getElementById('run-report-btn').addEventListener('click', loadReports);
 
 // ============== SETTINGS ==============
 async function loadSettings(showUpdate = true) {

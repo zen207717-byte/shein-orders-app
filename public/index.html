@@ -59,6 +59,8 @@
       <a href="#" data-view="orders" class="menu-item">📦 الطلبات</a>
       <a href="#" data-view="customers" class="menu-item">👥 الزبائن</a>
       <a href="#" data-view="shipments" class="menu-item">🚚 الشحنات</a>
+      <a href="#" data-view="invoices" class="menu-item">🧾 الفواتير</a>
+      <a href="#" data-view="reports" class="menu-item">📈 التقارير</a>
       <a href="#" data-view="settings" class="menu-item">⚙️ الإعدادات</a>
     </nav>
     <div class="side-menu-footer">
@@ -142,6 +144,7 @@
     <!-- CUSTOMERS -->
     <section id="view-customers" class="view">
       <div class="page-actions">
+        <button id="add-customer-btn" class="btn btn-primary btn-lg">➕ إضافة زبونة جديدة</button>
         <button id="export-customers-btn" class="btn btn-outline">📥 تصدير CSV</button>
       </div>
       <div class="filters">
@@ -156,6 +159,25 @@
         <button id="add-shipment-btn" class="btn btn-primary btn-lg">➕ إنشاء شحنة جديدة</button>
       </div>
       <div id="shipments-list" class="cards-list"></div>
+    </section>
+
+    <section id="view-invoices" class="view">
+      <div class="filters"><input type="text" id="invoices-search" class="input" placeholder="🔍 بحث باسم الزبونة أو رقم الطلب..."></div>
+      <div id="invoices-list" class="cards-list"></div>
+    </section>
+
+    <section id="view-reports" class="view">
+      <div class="card report-filters">
+        <div class="item-form-grid">
+          <div class="form-group"><label>من تاريخ</label><input type="date" id="report-date-from" class="input"></div>
+          <div class="form-group"><label>إلى تاريخ</label><input type="date" id="report-date-to" class="input"></div>
+          <div class="form-group"><label>الزبونة</label><select id="report-customer" class="input"><option value="">كل الزبائن</option></select></div>
+          <div class="form-group"><label>الحالة</label><select id="report-status" class="input"><option value="">كل الحالات</option></select></div>
+        </div>
+        <button id="run-report-btn" class="btn btn-primary">عرض التقرير</button>
+      </div>
+      <div id="report-summary" class="stats-grid"></div>
+      <div id="report-details"></div>
     </section>
 
     <!-- SETTINGS -->
@@ -298,6 +320,10 @@
         </div>
         <div id="order-items-list" class="order-items-list"></div>
       </section>
+      <section id="order-payments-section" class="order-items-section" style="display:none;">
+        <div class="order-items-heading"><div><h3>دفعات الزبونة</h3><p>يمكن تسجيل أكثر من دفعة لنفس الطلب</p></div><button type="button" id="add-payment-btn" class="btn btn-primary btn-sm">➕ تسجيل دفعة</button></div>
+        <div id="order-payments-list" class="order-items-list"></div>
+      </section>
       <div id="new-order-items-note" class="info-note">احفظ بيانات الطلب أولًا، وبعدها أضف القطع داخله.</div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" data-close="order-modal">إلغاء</button>
@@ -336,6 +362,7 @@
         <div class="form-group"><label>المقاس</label><input type="text" id="item-size" class="input" placeholder="M"></div>
         <div class="form-group"><label>الكمية *</label><input type="number" id="item-quantity" class="input" min="1" step="1" value="1" required></div>
         <div class="form-group"><label>الحالة</label><select id="item-status" class="input"></select></div>
+        <div id="item-cancellation-group" class="form-group form-span-2" style="display:none;"><label>سبب الإلغاء</label><textarea id="item-cancellation-reason" class="input" rows="2" placeholder="سبب إلغاء الزبونة للقطعة"></textarea></div>
         <div class="form-group"><label>سعر القطعة للزبونة *</label><input type="number" id="item-customer-price" class="input" min="0" step="0.01" value="0" required></div>
         <div class="form-group"><label>سعر القطعة الفعلي من SHEIN *</label><input type="number" id="item-shein-price" class="input" min="0" step="0.01" value="0" required></div>
       </div>
@@ -366,6 +393,7 @@
       <div class="form-group">
         <label>الزبونة / الطلب *</label>
         <select id="import-order-id" class="input" required></select>
+        <button type="button" id="import-add-customer-btn" class="btn btn-outline btn-sm" style="display:none;margin-top:8px;">إضافة زبونة جديدة</button>
       </div>
       <div id="import-image-preview" class="item-image-preview" style="display:none;"></div>
       <div class="item-form-grid">
@@ -410,6 +438,16 @@
         <select id="shipment-currency" class="input">
           <option value="SAR">ريال سعودي (SAR)</option>
           <option value="YER">ريال يمني (YER)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>حالة الشحنة</label>
+        <select id="shipment-status" class="input">
+          <option value="ordered_from_shein">تم الطلب من SHEIN</option>
+          <option value="arrived_saudi">وصلت السعودية</option>
+          <option value="shipped_to_yemen">شُحنت إلى اليمن</option>
+          <option value="arrived_yemen">وصلت اليمن</option>
+          <option value="completed">مكتملة</option>
         </select>
       </div>
       <div class="form-group">
@@ -468,6 +506,12 @@
     </div>
   </div>
 </div>
+
+<div id="customer-form-modal" class="modal" style="display:none;"><div class="modal-backdrop"></div><div class="modal-content"><div class="modal-header"><h2>إضافة زبونة جديدة</h2><button class="icon-btn modal-close" data-close="customer-form-modal">✕</button></div><form id="customer-form" class="modal-body"><input type="hidden" id="customer-id"><div class="form-group"><label>اسم الزبونة *</label><input id="customer-name" class="input" required></div><div class="form-group"><label>رقم الهاتف</label><input id="customer-phone" class="input" type="tel"></div><div class="form-group"><label>العنوان</label><input id="customer-address" class="input"></div><div class="form-group"><label>ملاحظات</label><textarea id="customer-notes" class="input" rows="3"></textarea></div><div class="modal-footer"><button type="button" class="btn btn-outline" data-close="customer-form-modal">إلغاء</button><button class="btn btn-primary" type="submit">حفظ الزبونة</button></div></form></div></div>
+
+<div id="payment-modal" class="modal" style="display:none;"><div class="modal-backdrop"></div><div class="modal-content"><div class="modal-header"><h2>تسجيل دفعة</h2><button class="icon-btn modal-close" data-close="payment-modal">✕</button></div><form id="payment-form" class="modal-body"><div class="form-group"><label>المبلغ *</label><input id="payment-amount" type="number" min="0.01" step="0.01" class="input" required></div><div class="form-group"><label>العملة</label><select id="payment-currency" class="input"><option value="SAR">SAR</option><option value="YER">YER</option></select></div><div class="form-group"><label>التاريخ</label><input id="payment-date" type="date" class="input" required></div><div class="form-group"><label>ملاحظات</label><input id="payment-notes" class="input"></div><div class="modal-footer"><button type="button" class="btn btn-outline" data-close="payment-modal">إلغاء</button><button class="btn btn-primary" type="submit">حفظ الدفعة</button></div></form></div></div>
+
+<div id="invoice-modal" class="modal" style="display:none;"><div class="modal-backdrop"></div><div class="modal-content modal-content-lg"><div class="modal-header no-print"><h2>فاتورة الطلب</h2><button class="icon-btn modal-close" data-close="invoice-modal">✕</button></div><div id="invoice-content" class="modal-body invoice-sheet"></div><div class="modal-footer no-print"><button type="button" class="btn btn-outline" data-close="invoice-modal">إغلاق</button><button id="print-invoice-btn" type="button" class="btn btn-primary">🖨️ طباعة الفاتورة</button></div></div></div>
 
 <!-- ======================== TOAST ======================== -->
 <div id="toast" class="toast"></div>
