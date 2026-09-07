@@ -1,5 +1,12 @@
-const DEFAULT_APP_BASE_URL = 'https://shein-orders-app.onrender.com';
+const DEFAULT_APP_BASE_URL = 'https://shein-orders-app-1.onrender.com';
 const activeReceipts = new Set();
+
+// Replace any URL saved by an older unpacked-extension version.
+chrome.storage.local.get({ appBaseUrl: DEFAULT_APP_BASE_URL }, ({ appBaseUrl }) => {
+  if (appBaseUrl !== DEFAULT_APP_BASE_URL) {
+    chrome.storage.local.set({ appBaseUrl: DEFAULT_APP_BASE_URL });
+  }
+});
 
 function encodePayload(payload) {
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -22,7 +29,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
       const configured = new URL(appBaseUrl);
       if (configured.protocol === 'https:' &&
-          (configured.hostname === 'shein-orders-app.onrender.com' || configured.hostname.endsWith('.onrender.com'))) {
+          configured.hostname === 'shein-orders-app-1.onrender.com') {
         baseUrl = configured.origin;
       }
     } catch (_) {}
