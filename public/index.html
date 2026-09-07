@@ -128,6 +128,7 @@
     <section id="view-orders" class="view">
       <div class="page-actions">
         <button id="add-order-btn" class="btn btn-primary btn-lg">➕ إضافة طلب جديد</button>
+        <button id="import-shein-link-btn" class="btn btn-shein btn-lg">🔗 استيراد من رابط SHEIN</button>
         <button id="export-orders-btn" class="btn btn-outline">📥 تصدير CSV</button>
       </div>
 
@@ -420,6 +421,19 @@
         <button type="button" class="btn btn-outline" data-close="shein-import-modal">إلغاء</button>
         <button type="submit" class="btn btn-primary">حفظ القطعة في الطلب</button>
       </div>
+    </form>
+  </div>
+</div>
+
+<div id="shein-link-modal" class="modal" style="display:none;">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <div class="modal-header"><h2>استيراد من رابط SHEIN</h2><button class="icon-btn modal-close" data-close="shein-link-modal">✕</button></div>
+    <form id="shein-link-form" class="modal-body">
+      <div class="info-note">انسخي رابط المنتج من تطبيق SHEIN أو المتصفح والصقيه هنا. لا يحتاج تسجيل دخول إلى SHEIN.</div>
+      <div class="form-group"><label>رابط منتج SHEIN *</label><input type="url" id="shein-link-url" class="input" inputmode="url" autocomplete="off" placeholder="https://us.shein.com/..." required></div>
+      <div id="shein-link-error" class="form-error"></div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline" data-close="shein-link-modal">إلغاء</button><button type="submit" id="shein-link-submit" class="btn btn-primary">فتح شاشة المراجعة</button></div>
     </form>
   </div>
 </div>

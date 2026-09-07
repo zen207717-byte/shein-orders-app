@@ -361,6 +361,11 @@ document.getElementById('orders-search').addEventListener('input', renderOrders)
 document.getElementById('orders-status-filter').addEventListener('change', renderOrders);
 
 document.getElementById('add-order-btn').addEventListener('click', () => openOrderModal(null));
+document.getElementById('import-shein-link-btn').addEventListener('click', () => {
+  document.getElementById('shein-link-form').reset();
+  document.getElementById('shein-link-error').textContent = '';
+  document.getElementById('shein-link-modal').style.display = 'flex';
+});
 document.getElementById('export-orders-btn').addEventListener('click', () => {
   window.location.href = '/api/export/orders';
 });
@@ -683,12 +688,34 @@ async function openSheinImportPreview(item) {
   } else if (existing) {
     alert.textContent = 'هذه القطعة محفوظة ومتزامنة بالفعل. لن يتم إنشاء نسخة مكررة.';
   } else {
-    alert.textContent = 'راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.';
+    alert.textContent = item.import_warning || 'راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.';
   }
   await refreshImportCustomerList(existing);
   updateImportImagePreview();
   document.getElementById('shein-import-modal').style.display = 'flex';
 }
+
+document.getElementById('shein-link-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const url = document.getElementById('shein-link-url').value.trim();
+  const error = document.getElementById('shein-link-error');
+  const button = document.getElementById('shein-link-submit');
+  error.textContent = '';
+  button.disabled = true;
+  button.textContent = 'جارٍ قراءة الرابط…';
+  try {
+    const payload = await api('/import/shein-link', { method: 'POST', body: { url } });
+    state.pendingSheinImport = payload;
+    sessionStorage.setItem(SHEIN_IMPORT_STORAGE_KEY, JSON.stringify(payload));
+    closeModal('shein-link-modal');
+    await openSheinImportPreview(payload);
+  } catch (err) {
+    error.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'فتح شاشة المراجعة';
+  }
+});
 
 function renderImportOrders(customerId, preferredOrderId = '') {
   const orderSelect = document.getElementById('import-order-id');

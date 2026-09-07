@@ -3,6 +3,7 @@ const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { db, getSetting, setSetting } = require('./db');
@@ -126,6 +127,72 @@ function getOrCreateCustomer(name, phone = '') {
 
 function validSyncValue(value, maxLength = 300, minLength = 3) {
   return typeof value === 'string' && value.length >= minLength && value.length <= maxLength && /^[A-Za-z0-9:._-]+$/.test(value);
+}
+
+function parseSheinUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    const hostname = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || (hostname !== 'shein.com' && !hostname.endsWith('.shein.com'))) return null;
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (!['goods_id', 'sku', 'skucode'].includes(key.toLowerCase())) url.searchParams.delete(key);
+    }
+    return url;
+  } catch (_) { return null; }
+}
+
+function decodeHtml(value = '') {
+  return String(value).replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+function metaContent(html, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']*)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${escaped}["']`, 'i')
+  ];
+  for (const pattern of patterns) { const match = html.match(pattern); if (match) return decodeHtml(match[1]).trim(); }
+  return '';
+}
+
+function firstJsonLdProduct(html) {
+  for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed = JSON.parse(decodeHtml(match[1]));
+      const entries = Array.isArray(parsed) ? parsed : (parsed['@graph'] || [parsed]);
+      const product = entries.find(entry => String(entry?.['@type'] || '').toLowerCase() === 'product');
+      if (product) return product;
+    } catch (_) {}
+  }
+  return {};
+}
+
+function safePrice(value) {
+  const match = String(value ?? '').replace(/,/g, '').match(/\d+(?:\.\d{1,2})?/);
+  const price = match ? Number(match[0]) : NaN;
+  return Number.isFinite(price) && price >= 0 && price <= 10000000 ? price : '';
+}
+
+async function fetchPublicSheinPage(initialUrl) {
+  let current = initialUrl;
+  for (let redirects = 0; redirects < 4; redirects += 1) {
+    const response = await fetch(current, {
+      redirect: 'manual', signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; UmMarwanImporter/1.0)', Accept: 'text/html' }
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const next = parseSheinUrl(new URL(response.headers.get('location') || '', current).href);
+      if (!next) throw new Error('تحويل الرابط خرج عن نطاق SHEIN');
+      current = next;
+      continue;
+    }
+    if (!response.ok) throw new Error(`تعذر قراءة صفحة SHEIN (${response.status})`);
+    return { html: (await response.text()).slice(0, 3000000), url: current };
+  }
+  throw new Error('رابط SHEIN يحتوي تحويلات كثيرة');
 }
 
 // ========== AUTH ROUTES ==========
@@ -299,6 +366,47 @@ app.get('/api/import/shein-item/:syncKey', requireAuth, (req, res) => {
   const item = db.prepare('SELECT * FROM order_items WHERE sync_key = ?').get(req.params.syncKey);
   if (!item) return res.status(404).json({ error: 'not_found' });
   res.json(hydrateItem(item));
+});
+
+// Mobile-friendly import from a public SHEIN product link. No cookies or SHEIN login are used.
+app.post('/api/import/shein-link', requireAuth, async (req, res) => {
+  const requestedUrl = parseSheinUrl(req.body?.url);
+  if (!requestedUrl) return res.status(400).json({ error: 'ألصق رابطًا صحيحًا من نطاق SHEIN يبدأ بـ https://' });
+
+  let finalUrl = requestedUrl;
+  let html = '';
+  let warning = '';
+  try {
+    const page = await fetchPublicSheinPage(requestedUrl);
+    finalUrl = page.url;
+    html = page.html;
+  } catch (_) {
+    warning = 'لم يتمكن النظام من قراءة بيانات المنتج من SHEIN. يمكنك إكمال الحقول يدويًا ثم الحفظ.';
+  }
+
+  const product = html ? firstJsonLdProduct(html) : {};
+  const offers = Array.isArray(product.offers) ? product.offers[0] : (product.offers || {});
+  const image = Array.isArray(product.image) ? product.image[0] : product.image;
+  const productName = String(product.name || metaContent(html, 'og:title') || '').trim();
+  const imageUrl = String(image || metaContent(html, 'og:image') || '').trim();
+  const price = safePrice(offers.price ?? metaContent(html, 'product:price:amount'));
+  const color = String(product.color || '').trim();
+  const size = String(product.size || '').trim();
+  let absoluteImage = '';
+  try { const parsedImage = new URL(String(imageUrl || ''), finalUrl); if (parsedImage.protocol === 'https:') absoluteImage = parsedImage.href; } catch (_) {}
+  const canonical = finalUrl.origin + finalUrl.pathname + finalUrl.search;
+  const identityHash = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 28);
+  const mutableHash = crypto.createHash('sha256').update([color, size, price || '', 1].join('|')).digest('hex').slice(0, 20);
+  if (!warning && !productName && !imageUrl && price === '') {
+    warning = 'فتح النظام الرابط، لكن SHEIN لم يرسل بيانات المنتج العامة. أكمل الحقول يدويًا.';
+  }
+  res.json({
+    source: 'shein-mobile-link', product_name: productName, product_url: canonical,
+    image_url: absoluteImage,
+    color, size, quantity: 1, price, sku: String(product.sku || '').trim(),
+    sync_key: `shein:link:v1:${identityHash}`, source_signature: `v1:${mutableHash}`,
+    receipt_token: crypto.randomBytes(24).toString('hex'), import_warning: warning
+  });
 });
 
 // Receives a reviewed SHEIN draft from the app UI. The extension never sends auth data.
