@@ -6,9 +6,21 @@
 }
 #am-shein-import-button:hover { background: #c2185b; }
 #am-shein-import-button:disabled { opacity: .65; cursor: wait; }
-.am-shein-cart-import-button {
-  display: block; width: 100%; margin-top: 8px; border: 1px solid #e91e63;
-  border-radius: 6px; padding: 8px 10px; background: #fff; color: #c2185b;
-  font: 700 13px/1.4 Arial, sans-serif; cursor: pointer;
+
+.am-shein-importer__cart-mount {
+  position: static !important; display: flex !important; clear: both !important;
+  width: 100% !important; height: auto !important; margin: 6px 0 0 !important;
+  padding: 0 !important; justify-content: flex-start !important; pointer-events: none !important;
 }
-.am-shein-cart-import-button:disabled { opacity: .65; cursor: wait; }
+.am-shein-importer__cart-button {
+  position: static !important; inset: auto !important; z-index: auto !important;
+  display: inline-flex !important; width: auto !important; min-width: 0 !important;
+  max-width: 100% !important; height: auto !important; margin: 0 !important;
+  border: 1px solid #e91e63 !important; border-radius: 5px !important;
+  padding: 5px 9px !important; background: #fff !important; color: #c2185b !important;
+  font: 700 12px/1.35 Arial, sans-serif !important; text-align: center !important;
+  white-space: normal !important; cursor: pointer !important; box-shadow: none !important;
+  transform: none !important; pointer-events: auto !important;
+}
+.am-shein-importer__cart-button:hover { background: #fff5f8 !important; }
+.am-shein-importer__cart-button:disabled { opacity: .65 !important; cursor: wait !important; }

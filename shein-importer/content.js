@@ -1,4 +1,7 @@
 (() => {
+  const CART_MOUNTED_ATTR = 'data-shein-importer-mounted';
+  const CART_BUTTON_CLASS = 'am-shein-importer__cart-button';
+  const CART_MOUNT_CLASS = 'am-shein-importer__cart-mount';
   const text = element => element?.textContent?.trim() || '';
   const attr = (root, selector, name) => root.querySelector(selector)?.getAttribute(name) || '';
   const firstText = (root, selectors) => {
@@ -57,6 +60,7 @@
 
   function addProductPageButton() {
     if (document.getElementById('am-shein-import-button')) return;
+    document.documentElement.setAttribute(CART_MOUNTED_ATTR, '1');
     const button = document.createElement('button');
     button.id = 'am-shein-import-button';
     button.type = 'button';
@@ -65,27 +69,60 @@
     document.documentElement.appendChild(button);
   }
 
+  function findCartItemRows() {
+    const selectors = [
+      '[data-testid="cart-item"]',
+      '[data-testid^="cart-item-"]',
+      '[data-testid*="cart-item"]',
+      '[class~="cart-item"]',
+      '[class*="cartItem"]',
+      '.product-list__item'
+    ];
+    const depth = element => {
+      let value = 0;
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) value += 1;
+      return value;
+    };
+    const candidates = [...new Set(document.querySelectorAll(selectors.join(',')))]
+      .filter(row => row.querySelector('img') && row.querySelector('a[href*="-p-"], a[href*="shein.com"]'))
+      .sort((a, b) => depth(b) - depth(a));
+
+    return candidates.filter((row, index) =>
+      !candidates.slice(0, index).some(selected => row.contains(selected))
+    );
+  }
+
   function addCartButtons() {
-    const rows = document.querySelectorAll('[data-testid*="cart-item"], [class*="cart-item"], [class*="cartItem"], .product-list__item');
-    rows.forEach(row => {
-      if (row.dataset.amSheinImportReady === '1') return;
-      row.dataset.amSheinImportReady = '1';
+    findCartItemRows().forEach(row => {
+      const existingButton = row.querySelector(`:scope > .${CART_MOUNT_CLASS} > .${CART_BUTTON_CLASS}`);
+      if (row.getAttribute(CART_MOUNTED_ATTR) === '1' && existingButton) return;
+
+      row.querySelectorAll(`:scope > .${CART_MOUNT_CLASS}`).forEach(mount => mount.remove());
+      row.setAttribute(CART_MOUNTED_ATTR, '1');
+
+      const mount = document.createElement('div');
+      mount.className = CART_MOUNT_CLASS;
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'am-shein-cart-import-button';
+      button.className = CART_BUTTON_CLASS;
       button.textContent = 'حفظ هذه القطعة للزبونة';
       button.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
         openImport(button, row);
       });
-      row.appendChild(button);
+      mount.appendChild(button);
+      row.appendChild(mount);
     });
   }
 
   if (/cart|shopping.?bag/i.test(location.pathname)) {
     addCartButtons();
-    new MutationObserver(addCartButtons).observe(document.body, { childList: true, subtree: true });
+    let refreshTimer;
+    new MutationObserver(() => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(addCartButtons, 80);
+    }).observe(document.body, { childList: true, subtree: true });
   } else {
     addProductPageButton();
   }
