@@ -54,12 +54,19 @@
     const isWholePage = root === document;
     const cartTitle = root.querySelector('.bsc-cart-item-goods-title__content[title], a[title]');
     const productName = cartTitle?.getAttribute('title') || firstText(root, ['h1', '[data-testid*="product-title"]', '[class*="goods-title"]', '[class*="product-name"]', 'a[title]']);
-    const readableLink = cartTitle?.getAttribute('href') || root.querySelector('a[href*="shein.com"], a[href*="-p-"]')?.href || '';
+    const readableLink = cartTitle?.getAttribute('href') || '';
     const productLink = readableLink || (isWholePage ? location.href.split('#')[0] : '');
+    const productImage = root.querySelector('img.j-cart-main-img, img');
     const rawImageUrl = (isWholePage ? attr(document, 'meta[property="og:image"]', 'content') : '')
-      || attr(root, 'img.j-cart-main-img', 'src') || attr(root, 'img', 'src');
+      || productImage?.currentSrc || productImage?.getAttribute('src') || '';
     const imageUrl = rawImageUrl ? new URL(rawImageUrl, location.href).href : '';
-    const priceText = firstText(root, ['.bsc-cart-item-goods-price-v2__sale-price', '.bsc-cart-item-mini__price', '[data-testid*="price"]', '.product-intro__head-mainprice', '[class*="salePrice"]', '[class*="price"]']);
+    const cartSalePrice = root.querySelector(
+      '.bsc-cart-item-goods-price-v1__sale-price[aria-label], '
+      + '.bsc-cart-item-goods-price-v2__sale-price[aria-label]'
+    );
+    const priceText = cartSalePrice?.getAttribute('aria-label') || (isWholePage
+      ? firstText(root, ['[data-testid*="price"]', '.product-intro__head-mainprice', '[class*="salePrice"]', '[class*="price"]'])
+      : '');
     const cartOption = root.querySelector('.bsc-cart-item-goods-sale-attr[aria-label]')?.getAttribute('aria-label') || '';
     const [cartColor = '', cartSize = ''] = cartOption.split('/').map(value => value.trim());
     const color = cartColor || selectedText(root, ['[data-attr-name*="Color"] [role="radio"]', '[class*="color"] [role="radio"]', '[class*="color"] li']) || firstText(root, ['[class*="color"]']);
