@@ -48,6 +48,9 @@ let state = {
   currentOrderItems: [],
   currentOrderPayments: [],
   customerFormContext: null,
+  importCustomers: [],
+  importOrders: [],
+  importSaving: false,
   pendingSheinImport: null,
   existingSheinItem: null
 };
@@ -664,15 +667,6 @@ function importChanges(existing, incoming) {
 async function openSheinImportPreview(item) {
   const existing = await fetchExistingSheinItem(item.sync_key);
   state.existingSheinItem = existing;
-  const select = document.getElementById('import-order-id');
-  select.innerHTML = '<option value="">اختر الزبونة والطلب</option>' + state.orders.map(order =>
-    `<option value="${order.id}">${escapeHtml(order.customer_name)} — ${escapeHtml(order.order_number || ('طلب #' + order.id))}</option>`
-  ).join('');
-  select.disabled = Boolean(existing);
-  const addCustomer = document.getElementById('import-add-customer-btn');
-  addCustomer.style.display = existing ? 'none' : 'inline-flex';
-  addCustomer.textContent = state.customers.length ? 'إضافة زبونة جديدة' : 'لا توجد زبائن — إضافة زبونة جديدة';
-  if (existing) select.value = String(existing.order_id);
   document.getElementById('import-product-name').value = item.product_name || '';
   document.getElementById('import-product-url').value = item.product_url || '';
   document.getElementById('import-image-url').value = item.image_url || '';
@@ -691,8 +685,52 @@ async function openSheinImportPreview(item) {
   } else {
     alert.textContent = 'راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.';
   }
+  await refreshImportCustomerList(existing);
   updateImportImagePreview();
   document.getElementById('shein-import-modal').style.display = 'flex';
+}
+
+function renderImportOrders(customerId, preferredOrderId = '') {
+  const orderSelect = document.getElementById('import-order-id');
+  const customer = state.importCustomers.find(c => String(c.id) === String(customerId));
+  const orders = state.importOrders.filter(order => String(order.customer_id) === String(customerId));
+  orderSelect.innerHTML = '<option value="new">➕ إنشاء طلب جديد</option>' + orders.map(order =>
+    `<option value="${order.id}">${escapeHtml(order.order_number || ('طلب #' + order.id))} — ${STATUS_LABELS[order.status] || order.status}</option>`
+  ).join('');
+  orderSelect.value = preferredOrderId && orders.some(order => String(order.id) === String(preferredOrderId))
+    ? String(preferredOrderId) : (orders[0] ? String(orders[0].id) : 'new');
+  document.getElementById('import-order-help').textContent = orders.length
+    ? `لدى ${customer ? customer.name : 'الزبونة'} ${orders.length} طلب. يمكنك اختيار أحدها أو إنشاء طلب جديد.`
+    : 'لا يوجد لهذه الزبونة طلب بعد؛ سيتم إنشاء طلب جديد عند تأكيد حفظ القطعة.';
+}
+
+async function refreshImportCustomerList(existing = state.existingSheinItem) {
+  const customerSelect = document.getElementById('import-customer-id');
+  const previousCustomer = customerSelect.value;
+  const previousOrder = document.getElementById('import-order-id').value;
+  const [customers, orders] = await Promise.all([api('/customers'), api('/orders')]);
+  state.importCustomers = customers;
+  state.importOrders = orders;
+  state.customers = customers;
+  state.orders = orders;
+  customerSelect.innerHTML = '<option value="">اختر الزبونة</option>' + customers.map(customer =>
+    `<option value="${customer.id}">${escapeHtml(customer.name)}${Number(customer.order_count) === 0 ? ' — بدون طلب' : ''}</option>`
+  ).join('');
+  let selectedCustomer = previousCustomer;
+  if (existing) {
+    const existingOrder = orders.find(order => String(order.id) === String(existing.order_id));
+    selectedCustomer = existingOrder?.customer_id || '';
+  }
+  if (!customers.some(customer => String(customer.id) === String(selectedCustomer))) selectedCustomer = '';
+  customerSelect.value = String(selectedCustomer || '');
+  customerSelect.disabled = Boolean(existing);
+  document.getElementById('import-order-id').disabled = Boolean(existing);
+  document.getElementById('import-add-customer-btn').style.display = existing ? 'none' : 'inline-flex';
+  if (selectedCustomer) renderImportOrders(selectedCustomer, existing?.order_id || previousOrder);
+  else {
+    document.getElementById('import-order-id').innerHTML = '<option value="">اختر الزبونة أولًا</option>';
+    document.getElementById('import-order-help').textContent = customers.length ? '' : 'لا توجد زبائن بعد. أضف زبونة جديدة للمتابعة.';
+  }
 }
 
 function updateImportImagePreview() {
@@ -703,11 +741,26 @@ function updateImportImagePreview() {
 }
 document.getElementById('import-image-url').addEventListener('input', updateImportImagePreview);
 document.getElementById('import-add-customer-btn').addEventListener('click', () => openCustomerForm('import'));
+document.getElementById('import-refresh-list-btn').addEventListener('click', async () => {
+  try { await refreshImportCustomerList(); toast('تم تحديث قائمة الزبائن', 'success'); }
+  catch (err) { toast(err.message, 'error'); }
+});
+document.getElementById('import-customer-id').addEventListener('change', event => renderImportOrders(event.target.value));
 
 document.getElementById('shein-import-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const body = {
-    order_id: Number(document.getElementById('import-order-id').value),
+  if (state.importSaving) return;
+  const customerId = document.getElementById('import-customer-id').value;
+  let orderId = document.getElementById('import-order-id').value;
+  if (!customerId) return toast('اختر الزبونة أولًا', 'error');
+  state.importSaving = true;
+  const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    const body = {
+    order_id: orderId === 'new' ? null : Number(orderId),
+    customer_id: Number(customerId),
+    create_new_order: orderId === 'new',
     product_name: document.getElementById('import-product-name').value.trim(),
     product_url: document.getElementById('import-product-url').value.trim(),
     image_url: document.getElementById('import-image-url').value.trim(),
@@ -721,7 +774,6 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
     source_signature: state.pendingSheinImport?.source_signature,
     receipt_token: state.pendingSheinImport?.receipt_token
   };
-  try {
     const saved = await api('/import/shein-item', { method: 'POST', body });
     state.pendingSheinImport = null;
     sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
@@ -731,6 +783,9 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
     toast('تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');
   } catch (err) {
     toast(err.message, 'error');
+  } finally {
+    state.importSaving = false;
+    if (submitButton) submitButton.disabled = false;
   }
 });
 
@@ -947,13 +1002,10 @@ document.getElementById('customer-form').addEventListener('submit', async event 
     closeModal('customer-form-modal');
     await loadCustomers();
     if (state.customerFormContext === 'import') {
-      const order = await api('/orders', { method: 'POST', body: {
-        customer_name: customer.name, customer_phone: customer.phone || '',
-        order_date: new Date().toISOString().split('T')[0], currency: 'SAR', status: 'in_cart'
-      }});
-      await loadOrders();
-      await openSheinImportPreview(state.pendingSheinImport);
-      document.getElementById('import-order-id').value = String(order.id);
+      await refreshImportCustomerList();
+      document.getElementById('import-customer-id').value = String(customer.id);
+      renderImportOrders(customer.id, 'new');
+      document.getElementById('shein-import-modal').style.display = 'flex';
     }
     state.customerFormContext = null;
     toast('تمت إضافة الزبونة', 'success');

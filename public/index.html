@@ -391,9 +391,17 @@
     <form id="shein-import-form" class="modal-body">
       <div id="import-alert" class="import-alert">راجع البيانات واختر الطلب قبل الحفظ. الحقول غير المقروءة تُترك فارغة.</div>
       <div class="form-group">
-        <label>الزبونة / الطلب *</label>
+        <label>الزبونة *</label>
+        <select id="import-customer-id" class="input" required></select>
+        <div class="import-list-actions">
+          <button type="button" id="import-refresh-list-btn" class="btn btn-outline btn-sm">↻ تحديث القائمة</button>
+          <button type="button" id="import-add-customer-btn" class="btn btn-outline btn-sm">إضافة زبونة جديدة</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>الطلب *</label>
         <select id="import-order-id" class="input" required></select>
-        <button type="button" id="import-add-customer-btn" class="btn btn-outline btn-sm" style="display:none;margin-top:8px;">إضافة زبونة جديدة</button>
+        <small id="import-order-help" class="field-note"></small>
       </div>
       <div id="import-image-preview" class="item-image-preview" style="display:none;"></div>
       <div class="item-form-grid">

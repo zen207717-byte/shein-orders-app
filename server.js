@@ -309,8 +309,15 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'بيانات المزامنة غير صحيحة' });
   }
   const orderId = Number(body.order_id);
-  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(orderId);
-  if (!order) return res.status(404).json({ error: 'اختر طلبًا صحيحًا لإضافة القطعة' });
+  const customerId = Number(body.customer_id);
+  const createNewOrder = body.create_new_order === true;
+  const selectedOrder = Number.isInteger(orderId) && orderId > 0
+    ? db.prepare('SELECT id FROM orders WHERE id = ? AND archived_at IS NULL').get(orderId)
+    : null;
+  const selectedCustomer = createNewOrder && Number.isInteger(customerId) && customerId > 0
+    ? db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId)
+    : null;
+  if (!selectedOrder && !selectedCustomer) return res.status(404).json({ error: 'اختر زبونة وطلبًا صحيحًا لإضافة القطعة' });
 
   const item = {
     product_url: body.product_url,
@@ -345,13 +352,21 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
       );
       syncOrderTotals(existing.order_id);
     } else {
+      let targetOrderId = selectedOrder?.id;
+      if (!targetOrderId) {
+        const created = db.prepare(`INSERT INTO orders
+          (customer_id, customer_name, customer_phone, order_date, currency, status)
+          VALUES (?, ?, ?, DATE('now'), 'SAR', 'in_cart')`)
+          .run(selectedCustomer.id, selectedCustomer.name, selectedCustomer.phone || '');
+        targetOrderId = created.lastInsertRowid;
+      }
       const info = db.prepare(`
         INSERT INTO order_items
         (order_id, product_url, product_name, image_url, sku, color, size, quantity,
          customer_unit_price, shein_unit_price, status, sync_key, source_signature)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_cart', ?, ?)
       `).run(
-        order.id, String(item.product_url || '').trim(), String(item.product_name).trim(),
+        targetOrderId, String(item.product_url || '').trim(), String(item.product_name).trim(),
         String(item.image_url || '').trim(), String(item.sku || '').trim(),
         String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
         Number(item.customer_unit_price), Number(item.shein_unit_price), body.sync_key, body.source_signature
@@ -359,7 +374,7 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
       itemId = info.lastInsertRowid;
       db.prepare(`INSERT INTO order_item_status_history (item_id, old_status, new_status)
         VALUES (?, NULL, 'in_cart')`).run(itemId);
-      syncOrderTotals(order.id);
+      syncOrderTotals(targetOrderId);
     }
     db.prepare(`INSERT OR REPLACE INTO shein_import_receipts
       (receipt_token, sync_key, source_signature, item_id) VALUES (?, ?, ?, ?)`)
