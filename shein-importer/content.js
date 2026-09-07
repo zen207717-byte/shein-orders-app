@@ -70,25 +70,40 @@
   }
 
   function findCartItemRows() {
-    const selectors = [
-      '[data-testid="cart-item"]',
-      '[data-testid^="cart-item-"]',
-      '[data-testid*="cart-item"]',
-      '[class~="cart-item"]',
-      '[class*="cartItem"]',
-      '.product-list__item'
-    ];
-    const depth = element => {
-      let value = 0;
-      for (let parent = element.parentElement; parent; parent = parent.parentElement) value += 1;
-      return value;
-    };
-    const candidates = [...new Set(document.querySelectorAll(selectors.join(',')))]
-      .filter(row => row.querySelector('img') && row.querySelector('a[href*="-p-"], a[href*="shein.com"]'))
-      .sort((a, b) => depth(b) - depth(a));
+    const productLinks = [...document.querySelectorAll(
+      'a[href*="-p-"], a[href*="/product/"], a[href*="goods_id="]'
+    )];
+    const rows = new Set();
 
-    return candidates.filter((row, index) =>
-      !candidates.slice(0, index).some(selected => row.contains(selected))
+    productLinks.forEach(link => {
+      let node = link.parentElement;
+      let levels = 0;
+      while (node && node !== document.body && levels < 10) {
+        const hasImage = Boolean(node.querySelector('img'));
+        const hasPrice = Boolean(node.querySelector(
+          '[class*="price" i], [data-testid*="price" i], [class*="amount" i]'
+        )) || /(?:\$|US\$|SAR|ر\.س)\s*\d|\d[\d,.]*\s*(?:\$|SAR|ر\.س)/i.test(text(node));
+        const hasCartControl = Boolean(node.querySelector(
+          'input[type="checkbox"], [role="checkbox"], input[type="number"], '
+          + '[class*="quantity" i], [class*="qty" i]'
+        ));
+        const hasItemIdentity = node.matches(
+          '[data-cart-item-id], [data-goods-id], [data-testid*="cart-item" i], '
+          + '[class~="cart-item"], [class*="cartItem"], [class*="product-item" i], '
+          + '[class*="productItem"], .product-list__item, li'
+        );
+
+        if (hasImage && hasPrice && hasCartControl && hasItemIdentity) {
+          rows.add(node);
+          break;
+        }
+        node = node.parentElement;
+        levels += 1;
+      }
+    });
+
+    return [...rows].filter(row =>
+      ![...rows].some(other => other !== row && row.contains(other))
     );
   }
 

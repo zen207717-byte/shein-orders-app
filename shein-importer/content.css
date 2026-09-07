@@ -8,9 +8,11 @@
 #am-shein-import-button:disabled { opacity: .65; cursor: wait; }
 
 .am-shein-importer__cart-mount {
-  position: static !important; display: flex !important; clear: both !important;
-  width: 100% !important; height: auto !important; margin: 6px 0 0 !important;
-  padding: 0 !important; justify-content: flex-start !important; pointer-events: none !important;
+  position: static !important; inset: auto !important; display: flex !important;
+  flex: 0 0 auto !important; clear: both !important; align-self: flex-end !important;
+  width: auto !important; max-width: 100% !important; height: auto !important;
+  margin: 6px 0 0 !important; padding: 0 !important;
+  justify-content: flex-start !important; pointer-events: none !important;
 }
 .am-shein-importer__cart-button {
   position: static !important; inset: auto !important; z-index: auto !important;
