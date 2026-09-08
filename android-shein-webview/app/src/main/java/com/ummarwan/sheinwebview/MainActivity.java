@@ -53,7 +53,7 @@ public class MainActivity extends AppCompatActivity {
         webView.getSettings().setMediaPlaybackRequiresUserGesture(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
-        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
+        WebView.setWebContentsDebuggingEnabled(false);
         webView.addJavascriptInterface(new SheinBridge(), "UmMarwanBridge");
 
         webView.setWebChromeClient(new WebChromeClient() {
