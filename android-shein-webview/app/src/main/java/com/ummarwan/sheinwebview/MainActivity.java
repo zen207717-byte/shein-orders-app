@@ -31,6 +31,7 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar progress;
     private JSONObject pendingProduct, savedItem;
     private boolean accountsLoaded;
+    private boolean productPageDetected;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override protected void onCreate(Bundle state) {
@@ -75,7 +76,10 @@ public class MainActivity extends AppCompatActivity {
                 if (!allowed) Toast.makeText(MainActivity.this, "تم منع رابط خارج القسم الآمن", Toast.LENGTH_LONG).show();
                 return !allowed;
             }
-            @Override public void onPageStarted(WebView v, String url, Bitmap icon) { updateAction(); }
+            @Override public void onPageStarted(WebView v, String url, Bitmap icon) {
+                if (shein) productPageDetected = false;
+                updateAction();
+            }
             @Override public void onPageFinished(WebView v, String url) {
                 updateAction(); if (shein && SheinUrlPolicy.isShein(url)) v.evaluateJavascript(CAPTURE_SCRIPT, null);
             }
@@ -94,9 +98,10 @@ public class MainActivity extends AppCompatActivity {
         else if (!accountsLoaded) { accountsLoaded = true; accountsView.loadUrl(SheinUrlPolicy.APP_ORIGIN); }
     }
     private void updateAction() {
-        boolean visible = sheinView.getVisibility() == View.VISIBLE && SheinUrlPolicy.isShein(sheinView.getUrl());
+        boolean visible = sheinView.getVisibility() == View.VISIBLE && productPageDetected;
         saveButton.setVisibility(visible ? View.VISIBLE : View.GONE);
-        if (visible) saveButton.setText(savedItem == null ? "إضافة لنظام أم مروان" : "تأكيد الإضافة إلى سلة SHEIN");
+        if (visible) saveButton.setText(savedItem != null && "pending_shein_cart".equals(savedItem.optString("status"))
+                ? "تأكيد الإضافة إلى سلة SHEIN" : "إضافة لنظام أم مروان");
     }
 
     private void openReview(JSONObject payload) {
@@ -144,6 +149,13 @@ public class MainActivity extends AppCompatActivity {
     public final class AppBridge {
         private final boolean sheinSource;
         AppBridge(boolean sheinSource) { this.sheinSource = sheinSource; }
+        @JavascriptInterface public void onPageClassification(String url, boolean hasProductId,
+                boolean hasTitle, boolean hasCurrentPrice, boolean hasAddToCart) {
+            if (!sheinSource) return;
+            boolean detected = SheinExtractionPolicy.shouldShowProductAction(url, hasProductId,
+                    hasTitle, hasCurrentPrice, hasAddToCart);
+            runOnUiThread(() -> { productPageDetected = detected; updateAction(); });
+        }
         @JavascriptInterface public void onProductCaptured(String json, String reason) {
             if (!sheinSource) return;
             runOnUiThread(() -> { try {
@@ -181,17 +193,21 @@ public class MainActivity extends AppCompatActivity {
       const abs=v=>{try{return v?new URL(v,location.href).href:''}catch(e){return''}};
       const badImg=u=>!/https:\\/\\//i.test(u)||/\\/(logo|icon|avatar|sprite|tracking|pixel)\\b|logo\\/192/i.test(u);
       const selected=s=>{for(const q of s){const e=[...document.querySelectorAll(q)].find(x=>vis(x)&&x.matches('[aria-checked="true"],[aria-selected="true"],.active,.selected,.is-selected'));if(e)return clean(e.getAttribute('aria-label')||e.getAttribute('title')||e.textContent)}return''};
-      const parsePrice=v=>{const m=clean(v).replace(/,/g,'').match(/(?:US\\$|\\$)\\s*(\\d{1,7}(?:\\.\\d{1,2})?)/i);return m?Number(m[1]):''};
-      const price=()=>{for(const q of ['.product-intro__head-mainprice','[class*="sale-price"]','[class*="salePrice"]','[data-testid*="price"]','[aria-label^="Price "]'])for(const e of document.querySelectorAll(q))if(vis(e)&&!e.closest('del,s,[class*="old-price"]')){const n=parsePrice(e.getAttribute('aria-label')||e.textContent);if(n!=='')return n}return''};
+      const parsePrice=v=>{const m=clean(v).replace(/,/g,'').match(/(?:US\\s*\\$|\\$)\\s*(\\d{1,7}(?:\\.\\d{1,2})?)/i);return m?Number(m[1]):''};
+      const addButton=()=>[...document.querySelectorAll('button,[role="button"]')].find(e=>vis(e)&&/add to (bag|cart)|أضف إلى (الحقيبة|السلة)/i.test(clean(e.textContent||e.getAttribute('aria-label'))));
+      const productRoot=()=>{const b=addButton();return b?.closest('[class*="product-intro"],[data-testid*="product"],main')||document.querySelector('main')||document};
+      const price=()=>{const root=productRoot();for(const q of ['.product-intro__head-mainprice','[class*="sale-price"]','[class*="salePrice"]','[data-testid*="price"]','[aria-label^="Price "]'])for(const e of root.querySelectorAll(q))if(vis(e)&&!e.closest('del,s,[class*="old-price"],[class*="original-price"]')){for(const v of [e.getAttribute('aria-label'),e.textContent,e.parentElement?.textContent,e.parentElement?.parentElement?.textContent]){const n=parsePrice(v);if(n!=='')return n}}return''};
       const image=()=>{const a=[];document.querySelectorAll('main img,[class*="product"] img').forEach(e=>{if(vis(e)&&((e.naturalWidth||0)>=180||(e.width||0)>=180))a.push(abs(e.currentSrc||e.src))});a.push(abs(document.querySelector('meta[property="og:image"]')?.content));return a.find(u=>u&&!badImg(u))||''};
       const hash=v=>{let h=2166136261;for(let i=0;i<v.length;i++){h^=v.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
       const cartCount=()=>{for(const e of document.querySelectorAll('a[href*="cart" i] [class*="badge"],a[href*="cart" i] sup,[aria-label*="cart" i]')){const m=clean(e.textContent||e.getAttribute('aria-label')).match(/\\b(\\d{1,3})\\b/);if(m)return Number(m[1])}return null};
       const success=()=>[...document.querySelectorAll('a,button,[role="dialog"],div')].some(e=>vis(e)&&/^(view cart|view bag)|added to (your )?(cart|bag)|عرض السلة|تمت الإضافة/i.test(clean(e.textContent)));
+      const classify=()=>{const url=location.href.split('#')[0],path=location.pathname,body=document.body.innerText||'';const hasId=/-p-\\d+/i.test(path)||/[?&]goods_id=\\d+/i.test(url)||/(?:goods[_ ]?id|product id)\\s*[:：]?\\s*\\w+/i.test(body);const hasTitle=!!clean(productRoot().querySelector('h1,[class*="title"]')?.textContent||document.querySelector('meta[property="og:title"]')?.content);UmMarwanBridge.onPageClassification(url,hasId,hasTitle,price()!=='',!!addButton())};
       const data=()=>{const url=location.href.split('#')[0], path=location.pathname;const pm=path.match(/-p-(\\d+)/i),gm=new URL(url).searchParams.get('goods_id');const sku=(document.body.innerText.match(/(?:SKU|Product ID|goods[_ ]?id)\\s*[:：]?\\s*([\\w-]+)/i)||[])[1]||gm||pm?.[1]||'';const name=clean(document.querySelector('main h1,h1,[class*="product"] [class*="title"]')?.textContent||document.querySelector('meta[property="og:title"]')?.content);const color=selected(['[data-attr-name*="Color" i] [role="radio"]','[aria-label*="Color" i][aria-checked]','[class*="color"] .active','[class*="color"] .selected']);const size=selected(['[data-attr-name*="Size" i] [role="radio"]','[aria-label*="Size" i][aria-checked]','[class*="size"] .active','[class*="size"] .selected']);const q=document.querySelector('input[aria-label="Quantity input"],input[type="number"][class*="quant" i]');const quantity=Math.max(1,Number(q?.value)||1),amount=price(),pic=image(),identity=[sku,location.host+path,color,size,quantity].join('|').toLowerCase();return{product_name:name,product_url:url,image_url:pic,color,size,quantity,price:amount,sku,sync_key:'shein:android:v2:'+hash(identity)+':'+hash(identity.split('').reverse().join('')),source_signature:'v2:'+hash([color,size,amount,quantity].join('|'))}};
       window.__umMarwanCapture=r=>UmMarwanBridge.onProductCaptured(JSON.stringify(data()),r||'manual');
       let pending=null;document.addEventListener('click',e=>{const b=e.target.closest('button,[role="button"]');if(!b||!/add to (bag|cart)|أضف إلى (الحقيبة|السلة)/i.test(clean(b.textContent||b.getAttribute('aria-label'))))return;pending={count:cartCount(),signal:success(),at:Date.now()};setTimeout(check,900);setTimeout(()=>pending=null,6000)},true);
       function check(){if(!pending)return;const count=cartCount(),ok=(count!==null&&pending.count!==null&&count>pending.count)||(!pending.signal&&success());if(ok){pending=null;UmMarwanBridge.onProductCaptured(JSON.stringify(data()),'verified-add-to-cart')}}
-      new MutationObserver(check).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+      let classifyTimer;new MutationObserver(()=>{check();clearTimeout(classifyTimer);classifyTimer=setTimeout(classify,180)}).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+      classify();
       })();
       """;
 

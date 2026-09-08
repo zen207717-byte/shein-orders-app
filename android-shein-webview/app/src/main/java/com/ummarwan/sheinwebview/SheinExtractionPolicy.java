@@ -6,11 +6,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class SheinExtractionPolicy {
-    private static final Pattern PRICE = Pattern.compile("(?:US\\$|\\$)\\s*(\\d{1,7}(?:\\.\\d{1,2})?)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PRICE = Pattern.compile("(?:US\\s*\\$|\\$)\\s*(\\d{1,7}(?:\\.\\d{1,2})?)", Pattern.CASE_INSENSITIVE);
     private SheinExtractionPolicy() {}
     public static double parseDollarPrice(String value) {
         Matcher match = PRICE.matcher(value == null ? "" : value.replace(",", ""));
         return match.find() ? Double.parseDouble(match.group(1)) : -1;
+    }
+    public static double chooseCurrentPrice(String primaryText, boolean primaryStruck,
+            String fallbackText, boolean fallbackStruck) {
+        if (!primaryStruck) {
+            double primary = parseDollarPrice(primaryText);
+            if (primary >= 0) return primary;
+        }
+        return fallbackStruck ? -1 : parseDollarPrice(fallbackText);
     }
     public static boolean isProductImage(String value) {
         if (value == null) return false;
@@ -24,6 +32,18 @@ public final class SheinExtractionPolicy {
             String path = url.getPath() == null ? "" : url.getPath();
             return (host.equals("shein.com") || host.endsWith(".shein.com"))
                     && (path.matches(".*-p-\\d+.*") || path.toLowerCase(Locale.ROOT).contains("/product/"));
+        } catch (Exception ignored) { return false; }
+    }
+
+    public static boolean shouldShowProductAction(String value, boolean hasProductId,
+            boolean hasTitle, boolean hasCurrentPrice, boolean hasAddToCart) {
+        try {
+            URI url = new URI(value);
+            String host = url.getHost() == null ? "" : url.getHost().toLowerCase(Locale.ROOT);
+            String path = url.getPath() == null ? "" : url.getPath().toLowerCase(Locale.ROOT);
+            if (!(host.equals("shein.com") || host.endsWith(".shein.com"))) return false;
+            if (path.matches(".*(?:^|/)(?:cart|checkout|search|category|categories)(?:/|$).*")) return false;
+            return hasTitle && hasCurrentPrice && hasAddToCart && (hasProductId || isProductUrl(value));
         } catch (Exception ignored) { return false; }
     }
 }
