@@ -37,10 +37,11 @@ function requireAuth(req, res, next) {
 }
 
 const ITEM_STATUSES = new Set([
-  'in_cart', 'ordered', 'shipped', 'arrived', 'delivered',
-  'cancelled_by_customer', 'out_of_stock'
+  'pending_review', 'pending_shein_cart', 'in_cart', 'ordered', 'shipped',
+  'arrived', 'delivered', 'change_required', 'cancelled_by_customer',
+  'out_of_stock', 'returned'
 ]);
-const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock']);
+const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock', 'returned']);
 
 function isHttpUrl(value) {
   if (!value) return true;
@@ -420,13 +421,23 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
   const customerId = Number(body.customer_id);
   const createNewOrder = body.create_new_order === true;
   const selectedOrder = Number.isInteger(orderId) && orderId > 0
-    ? db.prepare('SELECT id FROM orders WHERE id = ? AND archived_at IS NULL').get(orderId)
+    ? db.prepare('SELECT id, customer_id FROM orders WHERE id = ? AND archived_at IS NULL').get(orderId)
     : null;
   const selectedCustomer = createNewOrder && Number.isInteger(customerId) && customerId > 0
     ? db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId)
     : null;
   if (!selectedOrder && !selectedCustomer) return res.status(404).json({ error: 'اختر زبونة وطلبًا صحيحًا لإضافة القطعة' });
 
+  const isAndroid = body.source === 'shein-android-webview';
+  const targetCustomerId = selectedOrder?.customer_id || selectedCustomer?.id;
+  if (!targetCustomerId || (customerId && Number(targetCustomerId) !== customerId)) {
+    return res.status(400).json({ error: 'الطلب لا يتبع الزبونة المحددة' });
+  }
+  // Extension imports keep their historical key. Android imports are scoped to
+  // the customer, so two customers requesting the same SHEIN variant stay separate.
+  const storedSyncKey = isAndroid ? `${body.sync_key}:customer:${targetCustomerId}` : body.sync_key;
+  if (!validSyncValue(storedSyncKey, 300, 8)) return res.status(400).json({ error: 'معرف المزامنة طويل جدًا' });
+  const initialStatus = isAndroid ? 'pending_shein_cart' : 'in_cart';
   const item = {
     product_url: body.product_url,
     product_name: body.product_name,
@@ -437,13 +448,13 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
     quantity: body.quantity,
     customer_unit_price: body.customer_unit_price,
     shein_unit_price: body.shein_unit_price,
-    status: 'in_cart'
+    status: initialStatus
   };
   const error = validateItemInput(item);
   if (error) return res.status(400).json({ error });
 
   const trx = db.transaction(() => {
-    const existing = db.prepare('SELECT * FROM order_items WHERE sync_key = ?').get(body.sync_key);
+    const existing = db.prepare('SELECT * FROM order_items WHERE sync_key = ?').get(storedSyncKey);
     let itemId;
     if (existing) {
       itemId = existing.id;
@@ -464,34 +475,65 @@ app.post('/api/import/shein-item', requireAuth, (req, res) => {
       if (!targetOrderId) {
         const created = db.prepare(`INSERT INTO orders
           (customer_id, customer_name, customer_phone, order_date, currency, status)
-          VALUES (?, ?, ?, DATE('now'), 'SAR', 'in_cart')`)
-          .run(selectedCustomer.id, selectedCustomer.name, selectedCustomer.phone || '');
+          VALUES (?, ?, ?, DATE('now'), 'SAR', ?)`)
+          .run(selectedCustomer.id, selectedCustomer.name, selectedCustomer.phone || '', initialStatus);
         targetOrderId = created.lastInsertRowid;
       }
       const info = db.prepare(`
         INSERT INTO order_items
         (order_id, product_url, product_name, image_url, sku, color, size, quantity,
          customer_unit_price, shein_unit_price, status, sync_key, source_signature)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_cart', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         targetOrderId, String(item.product_url || '').trim(), String(item.product_name).trim(),
         String(item.image_url || '').trim(), String(item.sku || '').trim(),
         String(item.color || '').trim(), String(item.size || '').trim(), Number(item.quantity),
-        Number(item.customer_unit_price), Number(item.shein_unit_price), body.sync_key, body.source_signature
+        Number(item.customer_unit_price), Number(item.shein_unit_price), initialStatus, storedSyncKey, body.source_signature
       );
       itemId = info.lastInsertRowid;
       db.prepare(`INSERT INTO order_item_status_history (item_id, old_status, new_status)
-        VALUES (?, NULL, 'in_cart')`).run(itemId);
+        VALUES (?, NULL, ?)`).run(itemId, initialStatus);
       syncOrderTotals(targetOrderId);
     }
     db.prepare(`INSERT OR REPLACE INTO shein_import_receipts
       (receipt_token, sync_key, source_signature, item_id) VALUES (?, ?, ?, ?)`)
-      .run(body.receipt_token, body.sync_key, body.source_signature, itemId);
+      .run(body.receipt_token, storedSyncKey, body.source_signature, itemId);
     return itemId;
   });
 
   const itemId = trx();
-  res.status(201).json(hydrateItem(db.prepare('SELECT * FROM order_items WHERE id = ?').get(itemId)));
+  const saved = db.prepare(`SELECT i.*, o.customer_name FROM order_items i
+    JOIN orders o ON o.id = i.order_id WHERE i.id = ?`).get(itemId);
+  res.status(201).json(hydrateItem(saved));
+});
+
+app.post('/api/order-items/:id/confirm-shein-cart', requireAuth, (req, res) => {
+  const existing = db.prepare(`SELECT i.*, o.customer_name FROM order_items i
+    JOIN orders o ON o.id = i.order_id WHERE i.id = ?`).get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'القطعة غير موجودة' });
+  if (!['pending_shein_cart', 'change_required', 'in_cart'].includes(existing.status)) {
+    return res.status(409).json({ error: 'لا يمكن تأكيد السلة في الحالة الحالية' });
+  }
+  if (existing.status !== 'in_cart') {
+    db.transaction(() => {
+      db.prepare(`UPDATE order_items SET status = 'in_cart', shein_cart_confirmed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(existing.id);
+      db.prepare(`INSERT INTO order_item_status_history (item_id, old_status, new_status)
+        VALUES (?, ?, 'in_cart')`).run(existing.id, existing.status);
+      db.prepare(`UPDATE orders SET status = 'in_cart', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status IN ('pending_review', 'pending_shein_cart')`).run(existing.order_id);
+    })();
+  }
+  const item = db.prepare(`SELECT i.*, o.customer_name FROM order_items i
+    JOIN orders o ON o.id = i.order_id WHERE i.id = ?`).get(existing.id);
+  res.json(hydrateItem(item));
+});
+
+app.post('/api/order-items/:id/customer-confirmed', requireAuth, (req, res) => {
+  const info = db.prepare(`UPDATE order_items SET customer_confirmed = 1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?`).run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'القطعة غير موجودة' });
+  res.json({ ok: true, item_id: Number(req.params.id) });
 });
 
 app.post('/api/orders', requireAuth, (req, res) => {
@@ -708,11 +750,12 @@ app.get('/api/customers', requireAuth, (req, res) => {
 
 app.post('/api/customers', requireAuth, (req, res) => {
   const name = String(req.body?.name || '').trim();
+  const customerType = req.body?.customer_type === 'cash' ? 'cash' : 'account';
   if (!name) return res.status(400).json({ error: 'اسم الزبونة مطلوب' });
   const duplicate = db.prepare('SELECT id FROM customers WHERE name = ? COLLATE NOCASE').get(name);
   if (duplicate) return res.status(409).json({ error: 'هذه الزبونة موجودة بالفعل', customer_id: duplicate.id });
-  const info = db.prepare('INSERT INTO customers (name, phone, address, notes) VALUES (?, ?, ?, ?)')
-    .run(name, String(req.body?.phone || '').trim(), String(req.body?.address || '').trim(), String(req.body?.notes || '').trim());
+  const info = db.prepare('INSERT INTO customers (name, phone, address, notes, customer_type) VALUES (?, ?, ?, ?, ?)')
+    .run(name, String(req.body?.phone || '').trim(), String(req.body?.address || '').trim(), String(req.body?.notes || '').trim(), customerType);
   res.status(201).json(db.prepare('SELECT * FROM customers WHERE id = ?').get(info.lastInsertRowid));
 });
 
@@ -772,7 +815,9 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   const statusBreakdown = {};
   const statusLabels = {
     new: 'جديد',
-    in_cart: 'في السلة',
+    pending_review: 'بانتظار المراجعة',
+    pending_shein_cart: 'طلبات تحتاج إكمال في SHEIN',
+    in_cart: 'في سلة SHEIN',
     ordered: 'تم الطلب من SHEIN',
     shipped: 'تم الشحن',
     arrived: 'وصل',
@@ -780,12 +825,16 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
     shipped_to_yemen: 'تم شحنه إلى اليمن',
     yemen: 'وصل اليمن',
     delivered: 'تم التسليم',
+    change_required: 'يوجد تغيير — تحديث مطلوب',
     cancelled_by_customer: 'ملغاة من الزبونة',
-    out_of_stock: 'نفدت من SHEIN'
+    out_of_stock: 'نفدت من SHEIN',
+    returned: 'مرتجع'
   };
   for (const s of Object.keys(statusLabels)) {
     statusBreakdown[s] = all.filter(o => o.status === s).length;
   }
+  statusBreakdown.pending_shein_cart = db.prepare(`SELECT COUNT(*) AS c FROM order_items
+    WHERE status = 'pending_shein_cart'`).get().c;
 
   // Customers count
   const customerCount = db.prepare(`

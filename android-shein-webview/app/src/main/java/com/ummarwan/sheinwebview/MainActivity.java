@@ -1,6 +1,7 @@
 package com.ummarwan.sheinwebview;
 
 import android.annotation.SuppressLint;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.util.Base64;
@@ -14,250 +15,185 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
 import android.widget.Toast;
-
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-
+import com.google.android.material.button.MaterialButton;
 import org.json.JSONException;
 import org.json.JSONObject;
-
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
-    private WebView webView;
-    private View homePanel;
-    private View saveButton;
-    private ProgressBar progressBar;
-    private volatile boolean reviewOpening;
-    private volatile String currentPageUrl = "";
+    private WebView sheinView, accountsView;
+    private MaterialButton saveButton;
+    private ProgressBar progress;
+    private JSONObject pendingProduct, savedItem;
+    private boolean accountsLoaded;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
-    @Override
-    protected void onCreate(Bundle state) {
-        super.onCreate(state);
-        setContentView(R.layout.activity_main);
-        homePanel = findViewById(R.id.homePanel);
-        webView = findViewById(R.id.webView);
-        saveButton = findViewById(R.id.saveFloatingButton);
-        progressBar = findViewById(R.id.progressBar);
-
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.getSettings().setDomStorageEnabled(true);
-        webView.getSettings().setAllowFileAccess(false);
-        webView.getSettings().setAllowContentAccess(false);
-        webView.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        webView.getSettings().setSaveFormData(false);
-        webView.getSettings().setGeolocationEnabled(false);
-        webView.getSettings().setMediaPlaybackRequiresUserGesture(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
-        WebView.setWebContentsDebuggingEnabled(false);
-        webView.addJavascriptInterface(new SheinBridge(), "UmMarwanBridge");
-
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override public void onProgressChanged(WebView view, int progress) {
-                progressBar.setProgress(progress);
-                progressBar.setVisibility(progress < 100 ? View.VISIBLE : View.GONE);
-            }
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state); setContentView(R.layout.activity_main);
+        sheinView = findViewById(R.id.sheinWebView); accountsView = findViewById(R.id.accountsWebView);
+        saveButton = findViewById(R.id.saveFloatingButton); progress = findViewById(R.id.progressBar);
+        configure(sheinView, true); configure(accountsView, false);
+        try {
+            String restored = getPreferences(MODE_PRIVATE).getString("pending_saved_item", "");
+            if (!restored.isEmpty()) savedItem = new JSONObject(restored);
+        } catch (Exception ignored) {}
+        findViewById(R.id.tabShein).setOnClickListener(v -> showShein());
+        findViewById(R.id.tabAccounts).setOnClickListener(v -> showAccounts(null));
+        saveButton.setOnClickListener(v -> {
+            if (savedItem != null && "pending_shein_cart".equals(savedItem.optString("status"))) manualConfirm();
+            else sheinView.evaluateJavascript("window.__umMarwanCapture&&window.__umMarwanCapture('manual')", null);
         });
-        webView.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                if (SheinUrlPolicy.isAllowed(url)) return false;
-                Toast.makeText(MainActivity.this, "تم منع فتح رابط خارج SHEIN ونظام أم مروان", Toast.LENGTH_LONG).show();
-                return true;
-            }
-
-            @Override public void onPageStarted(WebView view, String url, Bitmap icon) {
-                reviewOpening = false;
-                currentPageUrl = url;
-                updateSaveButton(url);
-            }
-
-            @Override public void onPageFinished(WebView view, String url) {
-                currentPageUrl = url;
-                updateSaveButton(url);
-                if (SheinUrlPolicy.isShein(url)) view.evaluateJavascript(SHEIN_CAPTURE_SCRIPT, null);
-            }
-
-            @Override public void onSafeBrowsingHit(WebView view, WebResourceRequest request,
-                    int threatType, @NonNull SafeBrowsingResponse callback) {
-                callback.backToSafety(true);
-                Toast.makeText(MainActivity.this, "أوقف Android فتح الصفحة لأنها غير آمنة", Toast.LENGTH_LONG).show();
-            }
-        });
-
-        findViewById(R.id.openSheinButton).setOnClickListener(v -> openWeb(SheinUrlPolicy.SHEIN_HOME));
-        findViewById(R.id.openAccountsButton).setOnClickListener(v -> openWeb(SheinUrlPolicy.APP_ORIGIN));
-        saveButton.setOnClickListener(v -> captureCurrentProduct());
-
+        sheinView.loadUrl(SheinUrlPolicy.SHEIN_HOME);
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() {
-                if (webView.getVisibility() == View.VISIBLE && webView.canGoBack()) webView.goBack();
-                else if (webView.getVisibility() == View.VISIBLE) showHome();
-                else finish();
+                WebView active = accountsView.getVisibility() == View.VISIBLE ? accountsView : sheinView;
+                if (active.canGoBack()) active.goBack(); else finish();
             }
         });
     }
 
-    private void openWeb(String url) {
-        homePanel.setVisibility(View.GONE);
-        webView.setVisibility(View.VISIBLE);
-        updateSaveButton(url);
-        webView.loadUrl(url);
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    private void configure(WebView view, boolean shein) {
+        view.getSettings().setJavaScriptEnabled(true); view.getSettings().setDomStorageEnabled(true);
+        view.getSettings().setAllowFileAccess(false); view.getSettings().setAllowContentAccess(false);
+        view.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        view.getSettings().setSaveFormData(false); view.getSettings().setGeolocationEnabled(false);
+        CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(view, false);
+        view.addJavascriptInterface(new AppBridge(shein), "UmMarwanBridge");
+        view.setWebChromeClient(new WebChromeClient() { @Override public void onProgressChanged(WebView v, int n) {
+            if (v.getVisibility() == View.VISIBLE) { progress.setProgress(n); progress.setVisibility(n < 100 ? View.VISIBLE : View.GONE); }
+        }});
+        view.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                boolean allowed = shein ? SheinUrlPolicy.isShein(url) : url.startsWith(SheinUrlPolicy.APP_ORIGIN);
+                if (!allowed) Toast.makeText(MainActivity.this, "تم منع رابط خارج القسم الآمن", Toast.LENGTH_LONG).show();
+                return !allowed;
+            }
+            @Override public void onPageStarted(WebView v, String url, Bitmap icon) { updateAction(); }
+            @Override public void onPageFinished(WebView v, String url) {
+                updateAction(); if (shein && SheinUrlPolicy.isShein(url)) v.evaluateJavascript(CAPTURE_SCRIPT, null);
+            }
+            @Override public void onSafeBrowsingHit(WebView v, WebResourceRequest r, int t, @NonNull SafeBrowsingResponse cb) {
+                cb.backToSafety(true); Toast.makeText(MainActivity.this, "أوقف Android صفحة غير آمنة", Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
-    private void showHome() {
-        webView.setVisibility(View.GONE);
-        saveButton.setVisibility(View.GONE);
-        homePanel.setVisibility(View.VISIBLE);
+    private void showShein() {
+        accountsView.setVisibility(View.GONE); sheinView.setVisibility(View.VISIBLE); updateAction();
     }
-
-    private void updateSaveButton(String url) {
-        saveButton.setVisibility(SheinUrlPolicy.isShein(url) ? View.VISIBLE : View.GONE);
+    private void showAccounts(String url) {
+        sheinView.setVisibility(View.GONE); accountsView.setVisibility(View.VISIBLE); saveButton.setVisibility(View.GONE);
+        if (url != null) { accountsLoaded = true; accountsView.loadUrl(url); }
+        else if (!accountsLoaded) { accountsLoaded = true; accountsView.loadUrl(SheinUrlPolicy.APP_ORIGIN); }
     }
-
-    private void captureCurrentProduct() {
-        if (!SheinUrlPolicy.isShein(webView.getUrl())) {
-            Toast.makeText(this, "افتحي صفحة منتج SHEIN أولًا", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        webView.evaluateJavascript("window.__umMarwanCapture && window.__umMarwanCapture('manual')", null);
+    private void updateAction() {
+        boolean visible = sheinView.getVisibility() == View.VISIBLE && SheinUrlPolicy.isShein(sheinView.getUrl());
+        saveButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (visible) saveButton.setText(savedItem == null ? "إضافة لنظام أم مروان" : "تأكيد الإضافة إلى سلة SHEIN");
     }
 
     private void openReview(JSONObject payload) {
-        if (reviewOpening) return;
-        reviewOpening = true;
         try {
-            payload.put("source", "shein-android-webview");
+            pendingProduct = payload; payload.put("source", "shein-android-webview");
             payload.put("receipt_token", UUID.randomUUID().toString().replace("-", ""));
             String encoded = Base64.encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8),
                     Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-            String reviewUrl = SheinUrlPolicy.APP_ORIGIN + "/import/shein?data=" + encoded;
-            runOnUiThread(() -> {
-                Toast.makeText(this, "راجعي بيانات القطعة قبل الحفظ", Toast.LENGTH_SHORT).show();
-                webView.loadUrl(reviewUrl);
-            });
-        } catch (JSONException error) {
-            reviewOpening = false;
-            runOnUiThread(() -> Toast.makeText(this, "تعذر تجهيز بيانات القطعة", Toast.LENGTH_LONG).show());
-        }
+            showAccounts(SheinUrlPolicy.APP_ORIGIN + "/import/shein?data=" + encoded);
+        } catch (JSONException error) { Toast.makeText(this, "تعذر تجهيز بيانات القطعة", Toast.LENGTH_LONG).show(); }
     }
 
-    public final class SheinBridge {
+    private boolean sameVariant(JSONObject captured, JSONObject saved) {
+        String[] keys = {"product_url", "sku", "color", "size"};
+        for (String key : keys) {
+            String a = captured.optString(key, "").trim(), b = saved.optString(key, "").trim();
+            if (!a.isEmpty() && !b.isEmpty() && !a.equalsIgnoreCase(b)) return false;
+        }
+        return captured.optInt("quantity", 1) == saved.optInt("quantity", 1);
+    }
+    private void confirmCart(JSONObject captured, boolean automatic) {
+        if (savedItem == null || !sameVariant(captured, savedItem)) {
+            Toast.makeText(this, "لم تتطابق القطعة مع آخر طلب محفوظ؛ لم تتغير الحالة", Toast.LENGTH_LONG).show(); return;
+        }
+        int id = savedItem.optInt("id");
+        accountsView.evaluateJavascript("window.__umMarwanConfirmSheinCart&&window.__umMarwanConfirmSheinCart(" + id + ")", null);
+        if (!automatic) Toast.makeText(this, "جارٍ تأكيد الإضافة…", Toast.LENGTH_SHORT).show();
+    }
+    private void manualConfirm() {
+        new AlertDialog.Builder(this).setTitle("تأكيد الإضافة")
+                .setMessage("هل ضغطتِ Add to Cart وظهرت رسالة نجاح أو زاد رقم السلة؟")
+                .setPositiveButton("نعم، تأكيد", (d,w) -> sheinView.evaluateJavascript("window.__umMarwanCapture&&window.__umMarwanCapture('manual-cart-confirm')", null))
+                .setNegativeButton("إلغاء", null).show();
+    }
+    private void share(JSONObject item) {
+        String text = "تأكيد طلبك — " + item.optString("customer_name", "الزبون") + "\n\nالمنتج: " + item.optString("product_name")
+                + "\nاللون: " + item.optString("color") + "\nالمقاس: " + item.optString("size")
+                + "\nالكمية: " + item.optInt("quantity",1) + "\nالسعر: " + item.optDouble("customer_unit_price",0)
+                + "\nرابط المنتج: " + item.optString("product_url") + "\n\nيرجى التأكد من اللون والمقاس والكمية.";
+        Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+        startActivity(Intent.createChooser(send, "مشاركة مع الزبون"));
+        accountsView.evaluateJavascript("window.__umMarwanMarkCustomerConfirmed&&window.__umMarwanMarkCustomerConfirmed(" + item.optInt("id") + ")", null);
+    }
+
+    public final class AppBridge {
+        private final boolean sheinSource;
+        AppBridge(boolean sheinSource) { this.sheinSource = sheinSource; }
         @JavascriptInterface public void onProductCaptured(String json, String reason) {
-            if (!SheinUrlPolicy.isShein(currentPageUrl)) return;
-            try {
-                JSONObject payload = new JSONObject(json);
-                String capturedUrl = payload.optString("product_url", "");
-                if (!SheinUrlPolicy.isShein(capturedUrl)) {
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                            "تعذر التحقق من رابط المنتج. افتحي صفحة المنتج وحاولي مجددًا.", Toast.LENGTH_LONG).show());
-                    return;
+            if (!sheinSource) return;
+            runOnUiThread(() -> { try {
+                JSONObject p = new JSONObject(json);
+                if (!SheinExtractionPolicy.isProductUrl(p.optString("product_url")) || p.optString("product_name").isEmpty()) {
+                    Toast.makeText(MainActivity.this, "افتحي صفحة المنتج نفسها ثم حاولي مجددًا", Toast.LENGTH_LONG).show(); return;
                 }
-                if (payload.optString("product_name").isEmpty()) {
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                            "لم يستطع التطبيق قراءة اسم المنتج. غيّرت SHEIN الصفحة أو أنك لستِ داخل منتج.", Toast.LENGTH_LONG).show());
-                    return;
-                }
-                openReview(payload);
-            } catch (JSONException error) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                        "تعذر قراءة بيانات SHEIN؛ استخدمي صفحة المنتج نفسها.", Toast.LENGTH_LONG).show());
-            }
+                if ("verified-add-to-cart".equals(reason) || "manual-cart-confirm".equals(reason)) confirmCart(p, reason.startsWith("verified"));
+                else openReview(p);
+            } catch (Exception e) { Toast.makeText(MainActivity.this, "تعذر قراءة بيانات المنتج", Toast.LENGTH_LONG).show(); }});
         }
+        @JavascriptInterface public void onOrderSaved(String json) { if (sheinSource) return; runOnUiThread(() -> { try {
+            savedItem = new JSONObject(json);
+            getPreferences(MODE_PRIVATE).edit().putString("pending_saved_item", savedItem.toString()).apply();
+            showSaveDialog();
+        } catch (Exception ignored) {} }); }
+        @JavascriptInterface public void onCartConfirmed(String json) { if (sheinSource) return; runOnUiThread(() -> { try {
+            savedItem = new JSONObject(json);
+            getPreferences(MODE_PRIVATE).edit().remove("pending_saved_item").apply();
+            String name = savedItem.optString("customer_name", "الزبون");
+            Toast.makeText(MainActivity.this, "تمت إضافة طلب " + name + " إلى سلة SHEIN ✓", Toast.LENGTH_LONG).show(); showShein();
+        } catch (Exception ignored) {} }); }
+    }
+    private void showSaveDialog() {
+        new AlertDialog.Builder(this).setTitle("تم حفظ طلب الزبون")
+                .setMessage("تم حفظ طلب الزبون.\nباقي إضافة القطعة إلى سلة SHEIN.")
+                .setPositiveButton("الرجوع إلى SHEIN وإكمال الإضافة", (d,w) -> showShein())
+                .setNeutralButton("مشاركة مع الزبون", (d,w) -> share(savedItem))
+                .setNegativeButton("لاحقًا", null).show();
     }
 
-    private static final String SHEIN_CAPTURE_SCRIPT = """
-        (() => {
-          if (window.__umMarwanCaptureInstalled) return;
-          window.__umMarwanCaptureInstalled = true;
-          const clean = v => String(v || '').trim().replace(/\\s+/g, ' ');
-          const text = (root, selectors) => {
-            for (const selector of selectors) {
-              const el = root.querySelector(selector);
-              const value = clean(el?.getAttribute('aria-label') || el?.textContent);
-              if (value) return value;
-            }
-            return '';
-          };
-          const selected = (root, selectors) => {
-            for (const selector of selectors) {
-              const nodes = [...root.querySelectorAll(selector)];
-              const el = nodes.find(node => node.matches('[aria-checked="true"],[aria-selected="true"],.active,.selected,.is-selected'));
-              const value = clean(el?.getAttribute('aria-label') || el?.textContent || el?.getAttribute('title'));
-              if (value) return value;
-            }
-            return '';
-          };
-          const price = value => {
-            const match = clean(value).replace(/,/g, '').match(/(?:US\\$|\\$|SAR|ر\\.?س\\.?)\\s*(\\d+(?:\\.\\d{1,2})?)/i);
-            return match ? Number(match[1]) : '';
-          };
-          const hash = value => {
-            let result = 2166136261;
-            for (let i = 0; i < value.length; i += 1) {
-              result ^= value.charCodeAt(i); result = Math.imul(result, 16777619);
-            }
-            return (result >>> 0).toString(36);
-          };
-          const absolute = value => { try { return value ? new URL(value, location.href).href : ''; } catch (_) { return ''; } };
-          const visiblePrice = () => {
-            const selectors = ['[aria-label^="Price "]','[data-testid*="price"]','.product-intro__head-mainprice','[class*="sale-price"]','[class*="salePrice"]'];
-            for (const selector of selectors) {
-              const nodes = [...document.querySelectorAll(selector)].filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
-              for (const el of nodes) { const parsed = price(el.getAttribute('aria-label') || el.textContent); if (parsed !== '') return parsed; }
-            }
-            return '';
-          };
-          window.__umMarwanCapture = reason => {
-            const name = clean(document.querySelector('h1')?.textContent || document.querySelector('meta[property="og:title"]')?.content);
-            const image = absolute(document.querySelector('meta[property="og:image"]')?.content || document.querySelector('main img')?.currentSrc || document.querySelector('main img')?.src);
-            const color = selected(document, ['[data-attr-name*="Color" i] [role="radio"]','[aria-label*="Color" i] [role="radio"]','[class*="color"] [role="radio"]','[class*="color"] li']);
-            const size = selected(document, ['[data-attr-name*="Size" i] [role="radio"]','[aria-label*="Size" i] [role="radio"]','[class*="size"] [role="radio"]','[class*="size"] li']);
-            const quantityNode = document.querySelector('input[aria-label="Quantity input"], input[type="number"][class*="quant" i]');
-            const quantity = Number(quantityNode?.value) > 0 ? Number(quantityNode.value) : 1;
-            const skuText = text(document, ['[data-testid*="sku" i]','[class*="sku" i]']);
-            const sku = skuText.match(/(?:SKU|رمز المنتج)\\s*[:：]?\\s*([\\w-]+)/i)?.[1] || '';
-            const productUrl = location.href.split('#')[0];
-            const amount = visiblePrice();
-            const identity = [sku, location.hostname + location.pathname, name, image].join('|').toLowerCase();
-            const mutable = [color, size, amount, quantity].join('|').toLowerCase();
-            const payload = {
-              product_name: name, product_url: productUrl, image_url: image,
-              color, size, quantity, price: amount, sku,
-              sync_key: 'shein:android:v1:' + hash(identity) + ':' + hash(identity.split('').reverse().join('')),
-              source_signature: 'v1:' + hash(mutable)
-            };
-            UmMarwanBridge.onProductCaptured(JSON.stringify(payload), reason || 'manual');
-          };
-          let pending = null;
-          const cartSignal = () => /added to (?:your )?(?:bag|cart)|تمت الإضافة إلى (?:الحقيبة|السلة)/i.test(document.body.innerText || '');
-          document.addEventListener('click', event => {
-            const button = event.target.closest('button,[role="button"]');
-            if (!button || !/add to (?:bag|cart)|أضف إلى (?:الحقيبة|السلة)/i.test(clean(button.textContent || button.getAttribute('aria-label')))) return;
-            pending = { hadSignal: cartSignal(), at: Date.now() };
-            setTimeout(() => {
-              if (pending && !pending.hadSignal && cartSignal()) {
-                pending = null; window.__umMarwanCapture('verified-add-to-cart');
-              }
-            }, 1200);
-            setTimeout(() => { pending = null; }, 4500);
-          }, true);
-          const observer = new MutationObserver(() => {
-            if (pending && !pending.hadSignal && cartSignal() && Date.now() - pending.at < 4500) {
-              pending = null; window.__umMarwanCapture('verified-add-to-cart');
-            }
-          });
-          observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-        })();
-        """;
+    private static final String CAPTURE_SCRIPT = """
+      (()=>{ if(window.__umInstalled)return; window.__umInstalled=1;
+      const clean=v=>String(v||'').trim().replace(/\\s+/g,' '), vis=e=>e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';
+      const abs=v=>{try{return v?new URL(v,location.href).href:''}catch(e){return''}};
+      const badImg=u=>!/https:\\/\\//i.test(u)||/\\/(logo|icon|avatar|sprite|tracking|pixel)\\b|logo\\/192/i.test(u);
+      const selected=s=>{for(const q of s){const e=[...document.querySelectorAll(q)].find(x=>vis(x)&&x.matches('[aria-checked="true"],[aria-selected="true"],.active,.selected,.is-selected'));if(e)return clean(e.getAttribute('aria-label')||e.getAttribute('title')||e.textContent)}return''};
+      const parsePrice=v=>{const m=clean(v).replace(/,/g,'').match(/(?:US\\$|\\$)\\s*(\\d{1,7}(?:\\.\\d{1,2})?)/i);return m?Number(m[1]):''};
+      const price=()=>{for(const q of ['.product-intro__head-mainprice','[class*="sale-price"]','[class*="salePrice"]','[data-testid*="price"]','[aria-label^="Price "]'])for(const e of document.querySelectorAll(q))if(vis(e)&&!e.closest('del,s,[class*="old-price"]')){const n=parsePrice(e.getAttribute('aria-label')||e.textContent);if(n!=='')return n}return''};
+      const image=()=>{const a=[];document.querySelectorAll('main img,[class*="product"] img').forEach(e=>{if(vis(e)&&((e.naturalWidth||0)>=180||(e.width||0)>=180))a.push(abs(e.currentSrc||e.src))});a.push(abs(document.querySelector('meta[property="og:image"]')?.content));return a.find(u=>u&&!badImg(u))||''};
+      const hash=v=>{let h=2166136261;for(let i=0;i<v.length;i++){h^=v.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+      const cartCount=()=>{for(const e of document.querySelectorAll('a[href*="cart" i] [class*="badge"],a[href*="cart" i] sup,[aria-label*="cart" i]')){const m=clean(e.textContent||e.getAttribute('aria-label')).match(/\\b(\\d{1,3})\\b/);if(m)return Number(m[1])}return null};
+      const success=()=>[...document.querySelectorAll('a,button,[role="dialog"],div')].some(e=>vis(e)&&/^(view cart|view bag)|added to (your )?(cart|bag)|عرض السلة|تمت الإضافة/i.test(clean(e.textContent)));
+      const data=()=>{const url=location.href.split('#')[0], path=location.pathname;const pm=path.match(/-p-(\\d+)/i),gm=new URL(url).searchParams.get('goods_id');const sku=(document.body.innerText.match(/(?:SKU|Product ID|goods[_ ]?id)\\s*[:：]?\\s*([\\w-]+)/i)||[])[1]||gm||pm?.[1]||'';const name=clean(document.querySelector('main h1,h1,[class*="product"] [class*="title"]')?.textContent||document.querySelector('meta[property="og:title"]')?.content);const color=selected(['[data-attr-name*="Color" i] [role="radio"]','[aria-label*="Color" i][aria-checked]','[class*="color"] .active','[class*="color"] .selected']);const size=selected(['[data-attr-name*="Size" i] [role="radio"]','[aria-label*="Size" i][aria-checked]','[class*="size"] .active','[class*="size"] .selected']);const q=document.querySelector('input[aria-label="Quantity input"],input[type="number"][class*="quant" i]');const quantity=Math.max(1,Number(q?.value)||1),amount=price(),pic=image(),identity=[sku,location.host+path,color,size,quantity].join('|').toLowerCase();return{product_name:name,product_url:url,image_url:pic,color,size,quantity,price:amount,sku,sync_key:'shein:android:v2:'+hash(identity)+':'+hash(identity.split('').reverse().join('')),source_signature:'v2:'+hash([color,size,amount,quantity].join('|'))}};
+      window.__umMarwanCapture=r=>UmMarwanBridge.onProductCaptured(JSON.stringify(data()),r||'manual');
+      let pending=null;document.addEventListener('click',e=>{const b=e.target.closest('button,[role="button"]');if(!b||!/add to (bag|cart)|أضف إلى (الحقيبة|السلة)/i.test(clean(b.textContent||b.getAttribute('aria-label'))))return;pending={count:cartCount(),signal:success(),at:Date.now()};setTimeout(check,900);setTimeout(()=>pending=null,6000)},true);
+      function check(){if(!pending)return;const count=cartCount(),ok=(count!==null&&pending.count!==null&&count>pending.count)||(!pending.signal&&success());if(ok){pending=null;UmMarwanBridge.onProductCaptured(JSON.stringify(data()),'verified-add-to-cart')}}
+      new MutationObserver(check).observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+      })();
+      """;
 
-    @Override protected void onDestroy() {
-        webView.removeJavascriptInterface("UmMarwanBridge");
-        webView.destroy();
-        super.onDestroy();
-    }
+    @Override protected void onDestroy() { sheinView.destroy(); accountsView.destroy(); super.onDestroy(); }
 }

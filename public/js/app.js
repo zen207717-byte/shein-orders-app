@@ -2,7 +2,9 @@
 
 const STATUS_LABELS = {
   new: 'جديد',
-  in_cart: 'في السلة',
+  pending_review: 'بانتظار المراجعة',
+  pending_shein_cart: 'بانتظار الإضافة لسلة SHEIN',
+  in_cart: 'في سلة SHEIN',
   ordered: 'تم الطلب من SHEIN',
   shipped: 'تم الشحن',
   arrived: 'وصل',
@@ -10,8 +12,10 @@ const STATUS_LABELS = {
   shipped_to_yemen: 'تم شحنه إلى اليمن',
   yemen: 'وصل اليمن',
   delivered: 'تم التسليم',
+  change_required: 'يوجد تغيير — تحديث مطلوب',
   cancelled_by_customer: 'ملغاة من الزبونة',
-  out_of_stock: 'نفدت من SHEIN'
+  out_of_stock: 'نفدت من SHEIN',
+  returned: 'مرتجع'
 };
 
 const SHIPMENT_STATUS_LABELS = {
@@ -21,16 +25,20 @@ const SHIPMENT_STATUS_LABELS = {
 };
 
 const ITEM_STATUS_LABELS = {
-  in_cart: 'في السلة',
+  pending_review: 'بانتظار المراجعة',
+  pending_shein_cart: 'بانتظار الإضافة لسلة SHEIN',
+  in_cart: 'في سلة SHEIN',
   ordered: 'تم الطلب من SHEIN',
   shipped: 'تم الشحن',
   arrived: 'وصلت',
   delivered: 'تم التسليم',
+  change_required: 'يوجد تغيير — تحديث مطلوب',
   cancelled_by_customer: 'ملغاة من الزبونة',
-  out_of_stock: 'نفدت من SHEIN'
+  out_of_stock: 'نفدت من SHEIN',
+  returned: 'مرتجع'
 };
 
-const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock']);
+const EXCLUDED_ITEM_STATUSES = new Set(['cancelled_by_customer', 'out_of_stock', 'returned']);
 
 const CURRENCY_SYMBOLS = { SAR: 'ر.س', YER: 'ر.ي' };
 
@@ -799,15 +807,28 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
     shein_unit_price: Number(document.getElementById('import-shein-price').value),
     sync_key: state.pendingSheinImport?.sync_key,
     source_signature: state.pendingSheinImport?.source_signature,
-    receipt_token: state.pendingSheinImport?.receipt_token
+    receipt_token: state.pendingSheinImport?.receipt_token,
+    source: state.pendingSheinImport?.source || ''
   };
     const saved = await api('/import/shein-item', { method: 'POST', body });
+    const nativePayload = {
+      ...saved,
+      product_name: body.product_name, product_url: body.product_url, image_url: body.image_url,
+      color: body.color, size: body.size, quantity: body.quantity,
+      price: body.customer_unit_price, sku: body.sku,
+      source_signature: body.source_signature
+    };
+    if (window.UmMarwanBridge && typeof window.UmMarwanBridge.onOrderSaved === 'function') {
+      window.UmMarwanBridge.onOrderSaved(JSON.stringify(nativePayload));
+    }
     state.pendingSheinImport = null;
     sessionStorage.removeItem(SHEIN_IMPORT_STORAGE_KEY);
     state.existingSheinItem = saved;
     closeModal('shein-import-modal');
     await Promise.all([loadOrders(), loadDashboard(), loadCustomers()]);
-    toast('تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');
+    toast(body.source === 'shein-android-webview'
+      ? 'تم حفظ طلب الزبون. باقي إضافة القطعة إلى سلة SHEIN.'
+      : 'تم حفظ قطعة SHEIN داخل الطلب بحالة في السلة', 'success');
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -815,6 +836,26 @@ document.getElementById('shein-import-form').addEventListener('submit', async ev
     if (submitButton) submitButton.disabled = false;
   }
 });
+
+// Called only by the trusted Android WebView after an explicit/verified cart action.
+window.__umMarwanConfirmSheinCart = async itemId => {
+  try {
+    const item = await api(`/order-items/${Number(itemId)}/confirm-shein-cart`, { method: 'POST' });
+    await Promise.all([loadOrders(), loadDashboard()]);
+    if (window.UmMarwanBridge && typeof window.UmMarwanBridge.onCartConfirmed === 'function') {
+      window.UmMarwanBridge.onCartConfirmed(JSON.stringify(item));
+    }
+    return true;
+  } catch (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+};
+
+window.__umMarwanMarkCustomerConfirmed = async itemId => {
+  await api(`/order-items/${Number(itemId)}/customer-confirmed`, { method: 'POST' });
+  toast('تم تسجيل تأكيد الزبون', 'success');
+};
 
 function closeModal(id) {
   document.getElementById(id).style.display = 'none';
@@ -921,7 +962,7 @@ function renderCustomers() {
     card.className = 'customer-card';
     card.onclick = () => openCustomerModal(c.id);
     card.innerHTML = `
-      <div class="customer-card-name">${escapeHtml(c.name)}</div>
+      <div class="customer-card-name">${escapeHtml(c.name)} <small>${c.customer_type === 'cash' ? 'كاش' : 'بحساب'}</small></div>
       <div class="customer-card-phone">${escapeHtml(c.phone || 'لا يوجد رقم')}</div>
       <div class="customer-card-stats">
         <div class="customer-card-stat">
@@ -1024,7 +1065,8 @@ document.getElementById('customer-form').addEventListener('submit', async event 
       name: document.getElementById('customer-name').value.trim(),
       phone: document.getElementById('customer-phone').value.trim(),
       address: document.getElementById('customer-address').value.trim(),
-      notes: document.getElementById('customer-notes').value.trim()
+      notes: document.getElementById('customer-notes').value.trim(),
+      customer_type: document.getElementById('customer-type').value
     }});
     closeModal('customer-form-modal');
     await loadCustomers();

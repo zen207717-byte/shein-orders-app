@@ -131,14 +131,66 @@ if (!orderItemColumns.includes('source_signature')) {
 if (!orderItemColumns.includes('cancellation_reason')) {
   db.exec('ALTER TABLE order_items ADD COLUMN cancellation_reason TEXT');
 }
+if (!orderItemColumns.includes('customer_confirmed')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN customer_confirmed INTEGER NOT NULL DEFAULT 0');
+}
+if (!orderItemColumns.includes('shein_cart_confirmed_at')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN shein_cart_confirmed_at DATETIME');
+}
+// SQLite cannot extend an existing CHECK constraint in place. Rebuild only this
+// table, inside one transaction, when upgrading an older installation. IDs and
+// all business data are copied unchanged.
+const orderItemsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'order_items'").get()?.sql || '';
+if (!orderItemsSql.includes("'pending_shein_cart'")) {
+  db.pragma('foreign_keys = OFF');
+  db.exec(`
+    BEGIN;
+    CREATE TABLE order_items_upgrade (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL,
+      product_url TEXT, product_name TEXT NOT NULL, image_url TEXT, sku TEXT,
+      color TEXT, size TEXT,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+      customer_unit_price REAL NOT NULL DEFAULT 0 CHECK (customer_unit_price >= 0),
+      shein_unit_price REAL NOT NULL DEFAULT 0 CHECK (shein_unit_price >= 0),
+      status TEXT NOT NULL DEFAULT 'pending_review' CHECK (status IN (
+        'pending_review', 'pending_shein_cart', 'in_cart', 'ordered', 'shipped',
+        'arrived', 'delivered', 'change_required', 'out_of_stock',
+        'cancelled_by_customer', 'returned'
+      )),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sync_key TEXT, source_signature TEXT, cancellation_reason TEXT,
+      customer_confirmed INTEGER NOT NULL DEFAULT 0,
+      shein_cart_confirmed_at DATETIME,
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    INSERT INTO order_items_upgrade
+      (id, order_id, product_url, product_name, image_url, sku, color, size, quantity,
+       customer_unit_price, shein_unit_price, status, created_at, updated_at,
+       sync_key, source_signature, cancellation_reason, customer_confirmed, shein_cart_confirmed_at)
+    SELECT id, order_id, product_url, product_name, image_url, sku, color, size, quantity,
+       customer_unit_price, shein_unit_price, status, created_at, updated_at,
+       sync_key, source_signature, cancellation_reason, customer_confirmed, shein_cart_confirmed_at
+    FROM order_items;
+    DROP TABLE order_items;
+    ALTER TABLE order_items_upgrade RENAME TO order_items;
+    COMMIT;
+  `);
+  db.pragma('foreign_keys = ON');
+}
 const orderColumns = db.prepare('PRAGMA table_info(orders)').all().map(column => column.name);
 if (!orderColumns.includes('customer_id')) db.exec('ALTER TABLE orders ADD COLUMN customer_id INTEGER');
 if (!orderColumns.includes('archived_at')) db.exec('ALTER TABLE orders ADD COLUMN archived_at DATETIME');
+const customerColumns = db.prepare('PRAGMA table_info(customers)').all().map(column => column.name);
+if (!customerColumns.includes('customer_type')) db.exec("ALTER TABLE customers ADD COLUMN customer_type TEXT NOT NULL DEFAULT 'account'");
 const shipmentColumns = db.prepare('PRAGMA table_info(shipments)').all().map(column => column.name);
 if (!shipmentColumns.includes('saudi_arrival_date')) db.exec('ALTER TABLE shipments ADD COLUMN saudi_arrival_date DATE');
 if (!shipmentColumns.includes('yemen_shipping_date')) db.exec('ALTER TABLE shipments ADD COLUMN yemen_shipping_date DATE');
 if (!shipmentColumns.includes('yemen_arrival_date')) db.exec('ALTER TABLE shipments ADD COLUMN yemen_arrival_date DATE');
 db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  CREATE INDEX IF NOT EXISTS idx_order_items_status ON order_items(status);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_sync_key
     ON order_items(sync_key) WHERE sync_key IS NOT NULL AND sync_key <> '';
   CREATE TABLE IF NOT EXISTS shein_import_receipts (
