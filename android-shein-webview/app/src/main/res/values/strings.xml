@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">حسابات أم مروان</string>
+    <string name="open_shein">فتح SHEIN</string>
+    <string name="open_accounts">فتح حسابات أم مروان</string>
+    <string name="save_item">حفظ هذه القطعة في نظام أم مروان</string>
+    <string name="home_title">حسابات أم مروان</string>
+    <string name="home_subtitle">نسخة تجريبية لاستيراد قطع SHEIN</string>
+    <string name="test_warning">نسخة اختبار فقط — راجعي البيانات قبل الحفظ</string>
+</resources>
